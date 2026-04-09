@@ -9,6 +9,7 @@ Web app for comparing Lithuania's daily fuel prices from ENA and finding station
 - Matches stations to OpenStreetMap fuel locations and caches coordinates
 - Falls back to limited address geocoding for stations that were not matched yet
 - Lets the user click map points **A** and **B** and highlights stations near the route
+- Supports two route modes: all stations along the route or the cheapest stop based on fuel price, planned liters, and estimated detour cost
 
 ## Run locally
 

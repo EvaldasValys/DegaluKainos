@@ -1,6 +1,14 @@
 import { divIcon, latLng, latLngBounds } from 'leaflet'
 import { useEffect } from 'react'
-import { MapContainer, Marker, Popup, Polyline, TileLayer, useMap, useMapEvents } from 'react-leaflet'
+import {
+  MapContainer,
+  Marker,
+  Popup,
+  Polyline,
+  TileLayer,
+  useMap,
+  useMapEvents,
+} from 'react-leaflet'
 import type { RoutePoint, RouteResult, StationRecord } from '../../shared/types'
 
 interface RouteMapProps {
@@ -8,6 +16,7 @@ interface RouteMapProps {
   route: RouteResult | null
   activeSelection: 'start' | 'end'
   routeStationIds: Set<string>
+  featuredStationId: string | null
   startPoint: RoutePoint | null
   endPoint: RoutePoint | null
   onMapPick: (point: RoutePoint) => void
@@ -25,6 +34,7 @@ function createMarker(className: string, label: string) {
 
 const stationIcon = createMarker('map-marker--station', '')
 const reachableIcon = createMarker('map-marker--reachable', '')
+const featuredIcon = createMarker('map-marker--featured', '€')
 const startIcon = createMarker('map-marker--start', 'A')
 const endIcon = createMarker('map-marker--end', 'B')
 
@@ -85,6 +95,7 @@ export function RouteMap({
   route,
   activeSelection,
   routeStationIds,
+  featuredStationId,
   startPoint,
   endPoint,
   onMapPick,
@@ -100,32 +111,46 @@ export function RouteMap({
         />
         <LocationPicker activeSelection={activeSelection} onMapPick={onMapPick} />
         <FitToContent route={route} startPoint={startPoint} endPoint={endPoint} />
-        {routeLine.length > 0 && <Polyline positions={routeLine} pathOptions={{ color: '#ff6b35', weight: 5 }} />}
+        {routeLine.length > 0 && (
+          <Polyline positions={routeLine} pathOptions={{ color: '#ff6b35', weight: 5 }} />
+        )}
         {startPoint && <Marker position={[startPoint.lat, startPoint.lng]} icon={startIcon} />}
         {endPoint && <Marker position={[endPoint.lat, endPoint.lng]} icon={endIcon} />}
         {stations
           .filter((station) => station.coordinates !== null)
-          .map((station) => (
-            <Marker
-              key={station.id}
-              position={[station.coordinates!.lat, station.coordinates!.lng]}
-              icon={routeStationIds.has(station.id) ? reachableIcon : stationIcon}
-            >
-              <Popup>
-                <strong>{station.network}</strong>
-                <br />
-                {station.address}
-                <br />
-                {station.city}
-                <br />
-                {`95: ${formatPrice(station.prices.gasoline95)}`}
-                <br />
-                {`D: ${formatPrice(station.prices.diesel)}`}
-                <br />
-                {`SND: ${formatPrice(station.prices.lpg)}`}
-              </Popup>
-            </Marker>
-          ))}
+          .map((station) => {
+            const position = [station.coordinates!.lat, station.coordinates!.lng] as [number, number]
+            const icon =
+              station.id === featuredStationId
+                ? featuredIcon
+                : routeStationIds.has(station.id)
+                  ? reachableIcon
+                  : stationIcon
+
+            return (
+              <Marker key={station.id} position={position} icon={icon}>
+                <Popup>
+                  <strong>{station.network}</strong>
+                  <br />
+                  {station.address}
+                  <br />
+                  {station.city}
+                  <br />
+                  {station.id === featuredStationId && (
+                    <>
+                      <span>Geriausias pasirinkimas</span>
+                      <br />
+                    </>
+                  )}
+                  {`95: ${formatPrice(station.prices.gasoline95)}`}
+                  <br />
+                  {`D: ${formatPrice(station.prices.diesel)}`}
+                  <br />
+                  {`SND: ${formatPrice(station.prices.lpg)}`}
+                </Popup>
+              </Marker>
+            )
+          })}
       </MapContainer>
     </div>
   )

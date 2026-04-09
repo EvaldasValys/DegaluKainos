@@ -147,6 +147,12 @@
   color: #334155;
 }
 
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
 .field input,
 .field select,
 .primary-button,
@@ -198,6 +204,30 @@
   background: #fff7ed;
 }
 
+.toggle-group {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 0.85rem;
+}
+
+.toggle-button {
+  font: inherit;
+  padding: 0.85rem 0.9rem;
+  border-radius: 0.85rem;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #0f172a;
+  cursor: pointer;
+  text-align: left;
+}
+
+.toggle-button--active {
+  border-color: #ea580c;
+  background: #fff7ed;
+  box-shadow: inset 0 0 0 1px rgba(234, 88, 12, 0.12);
+}
+
 .route-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -233,6 +263,58 @@
 
 .route-error {
   color: #b91c1c;
+}
+
+.result-card {
+  margin-top: 1rem;
+  padding: 1rem;
+  border-radius: 0.9rem;
+  background: linear-gradient(135deg, #fff7ed, #fffbeb);
+  border: 1px solid #fed7aa;
+}
+
+.result-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 1rem;
+}
+
+.result-card__header strong {
+  display: block;
+  color: #9a3412;
+  font-size: 1.1rem;
+  margin-top: 0.15rem;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.metric-card {
+  padding: 0.8rem;
+  border-radius: 0.85rem;
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid #fed7aa;
+}
+
+.metric-card--wide {
+  grid-column: 1 / -1;
+}
+
+.metric-card strong {
+  display: block;
+  margin-top: 0.25rem;
+  color: #7c2d12;
+}
+
+.metric-label {
+  display: block;
+  font-size: 0.85rem;
+  color: #9a3412;
 }
 
 .coverage-list {
@@ -285,6 +367,10 @@
   background: #f0fdf4;
 }
 
+.station-row--best {
+  background: #fff7ed;
+}
+
 .address-text {
   margin-top: 0.25rem;
   color: #64748b;
@@ -311,6 +397,11 @@
   color: #166534;
 }
 
+.route-pill--best {
+  background: #ffedd5;
+  color: #c2410c;
+}
+
 .route-chip {
   background: #fff7ed;
   color: #c2410c;
@@ -318,6 +409,22 @@
 
 .route-chip strong {
   font-size: 1rem;
+}
+
+.empty-state {
+  margin: 0;
+  padding: 1rem;
+  border-radius: 0.9rem;
+  background: #f8fafc;
+  color: #475569;
+}
+
+.table-number {
+  white-space: nowrap;
+}
+
+.table-number--muted {
+  color: #94a3b8;
 }
 
 .map-marker {
@@ -339,6 +446,10 @@
 
 .map-marker--reachable {
   background: #16a34a;
+}
+
+.map-marker--featured {
+  background: #f59e0b;
 }
 
 .map-marker--start {
@@ -376,8 +487,18 @@
     grid-template-columns: 1fr;
   }
 
+  .field-grid,
+  .toggle-group,
   .route-actions {
     grid-template-columns: 1fr;
+  }
+
+  .metric-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .result-card__header {
+    flex-direction: column;
   }
 
   .map-canvas {
