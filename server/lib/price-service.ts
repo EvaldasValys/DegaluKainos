@@ -5,6 +5,7 @@ import { writePublishedSnapshot } from './snapshot-store.js'
 import {
   buildStationId,
   formatLithuaniaDate,
+  isIsoDateString,
   normalizeText,
   parseFuelValue,
   parseStationAddress,
@@ -93,7 +94,15 @@ function ensureUniqueIds(stations: StationRecord[]) {
 }
 
 export async function fetchTodaySnapshot(): Promise<PriceSnapshot> {
-  const requestedDate = formatLithuaniaDate()
+  return fetchSnapshotForDate(formatLithuaniaDate())
+}
+
+export async function fetchSnapshotForDate(snapshotDate: string): Promise<PriceSnapshot> {
+  if (!isIsoDateString(snapshotDate)) {
+    throw new Error('Snapshot date must be in YYYY-MM-DD format.')
+  }
+
+  const requestedDate = snapshotDate
   const { sourceUrl, workbook } = await downloadWorkbook(requestedDate)
   const sheetName = workbook.SheetNames.find((name) => normalizeText(name).includes('degalu'))
 
@@ -139,8 +148,8 @@ export async function fetchTodaySnapshot(): Promise<PriceSnapshot> {
   }
 }
 
-export async function refreshLatestSnapshot() {
-  const snapshot = await fetchTodaySnapshot()
+export async function refreshLatestSnapshot(snapshotDate = formatLithuaniaDate()) {
+  const snapshot = await fetchSnapshotForDate(snapshotDate)
   await writePublishedSnapshot(snapshot)
   return snapshot
 }

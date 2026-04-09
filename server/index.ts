@@ -5,6 +5,7 @@ import { geocodeAddress, suggestAddresses } from './lib/geocoding-service.js'
 import { refreshLatestSnapshot } from './lib/price-service.js'
 import { fetchRoute } from './lib/routing-service.js'
 import { readLatestPublishedSnapshot } from './lib/snapshot-store.js'
+import { isIsoDateString } from './lib/utils.js'
 
 const projectRoot = process.cwd()
 const isProduction = process.env.NODE_ENV === 'production'
@@ -25,6 +26,14 @@ function parseRoutePoint(value: string | undefined) {
   }
 
   return { lat, lng }
+}
+
+function parseSnapshotDate(value: string | undefined) {
+  if (!value) {
+    return null
+  }
+
+  return isIsoDateString(value) ? value : null
 }
 
 async function createServer() {
@@ -64,8 +73,16 @@ async function createServer() {
       return
     }
 
+    const requestedDate = String(request.query.date ?? '').trim()
+    const snapshotDate = parseSnapshotDate(requestedDate || undefined)
+
+    if (requestedDate && !snapshotDate) {
+      response.status(400).json({ error: 'Snapshot date must use YYYY-MM-DD format.' })
+      return
+    }
+
     try {
-      const snapshot = await refreshLatestSnapshot()
+      const snapshot = await refreshLatestSnapshot(snapshotDate ?? undefined)
       response.json({
         snapshotDate: snapshot.snapshotDate,
         refreshedAt: snapshot.fetchedAt,

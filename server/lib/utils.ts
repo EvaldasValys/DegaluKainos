@@ -27,6 +27,25 @@ export function formatLithuaniaDate(date = new Date()) {
   return lithuaniaDateFormatter.format(date)
 }
 
+export function isIsoDateString(value: string) {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+
+  if (!match) {
+    return false
+  }
+
+  const yearValue = Number(match[1])
+  const monthValue = Number(match[2])
+  const dayValue = Number(match[3])
+  const parsedDate = new Date(Date.UTC(yearValue, monthValue - 1, dayValue))
+
+  return (
+    parsedDate.getUTCFullYear() === yearValue &&
+    parsedDate.getUTCMonth() === monthValue - 1 &&
+    parsedDate.getUTCDate() === dayValue
+  )
+}
+
 export function normalizeText(value: string) {
   const withoutAccents = value
     .normalize('NFKD')

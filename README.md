@@ -75,6 +75,19 @@ npm run build
 npm run refresh:snapshot
 ```
 
+To publish a specific date manually:
+
+```bash
+npm run refresh:snapshot -- 2026-04-09
+```
+
+On Render, the simplest manual path is the web service **Shell**:
+
+```bash
+cd /opt/render/project/src
+npm run refresh:snapshot -- 2026-04-09
+```
+
 This writes:
 
 - `data/snapshots/latest.json`
@@ -100,6 +113,7 @@ This command:
 You can also trigger publishing remotely through:
 
 - `POST /api/admin/refresh`
+- `POST /api/admin/refresh?date=2026-04-09`
 
 Set this environment variable on the server:
 
@@ -111,6 +125,14 @@ Then send the token in the request header:
 
 ```bash
 x-admin-refresh-token: your-secret-token
+```
+
+Example with a specific date:
+
+```bash
+curl -X POST \
+  -H "x-admin-refresh-token: your-secret-token" \
+  "https://your-app.onrender.com/api/admin/refresh?date=2026-04-09"
 ```
 
 If `ADMIN_REFRESH_TOKEN` is not configured, the admin refresh endpoint stays disabled.
