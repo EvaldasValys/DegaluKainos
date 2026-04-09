@@ -14,8 +14,9 @@ import { RouteMap } from './components/RouteMap'
 import { fetchRoute, fetchTodayPrices } from './lib/api'
 import './App.css'
 
-type SortKey = 'price-asc' | 'price-desc' | 'network'
+type SortKey = 'price-asc' | 'price-desc' | 'network' | 'detour-asc' | 'total-cost-asc'
 type ComparisonMode = 'along-route' | 'cheapest-route'
+type ListVisibility = 'all' | 'priced' | 'mapped' | 'route'
 
 interface RouteCandidate {
   station: StationRecord
@@ -27,6 +28,11 @@ interface RouteCandidate {
   detourFuelLiters: number
   detourFuelCost: number | null
   totalEstimatedCost: number | null
+}
+
+interface MapFocusTarget {
+  stationId: string
+  requestId: number
 }
 
 const fuelPriceFormatter = new Intl.NumberFormat('lt-LT', {
@@ -89,24 +95,81 @@ function formatLiters(liters: number) {
   return `${quantityFormatter.format(liters)} l`
 }
 
+function compareNullableNumbers(
+  left: number | null | undefined,
+  right: number | null | undefined,
+  direction: 'asc' | 'desc' = 'asc',
+) {
+  if (left === null || left === undefined) {
+    return right === null || right === undefined ? 0 : 1
+  }
+
+  if (right === null || right === undefined) {
+    return -1
+  }
+
+  return direction === 'desc' ? right - left : left - right
+}
+
+function compareStationNames(left: StationRecord, right: StationRecord) {
+  return `${left.network}-${left.city}-${left.address}`.localeCompare(
+    `${right.network}-${right.city}-${right.address}`,
+    'lt',
+  )
+}
+
+function stationMatchesListVisibility(
+  station: StationRecord,
+  fuelKey: FuelKey,
+  listVisibility: ListVisibility,
+  routeStationIds: Set<string>,
+) {
+  if (listVisibility === 'priced') {
+    return station.prices[fuelKey] !== null
+  }
+
+  if (listVisibility === 'mapped') {
+    return station.coordinates !== null
+  }
+
+  if (listVisibility === 'route') {
+    return routeStationIds.has(station.id)
+  }
+
+  return true
+}
+
 function compareStations(
   left: StationRecord,
   right: StationRecord,
   fuelKey: FuelKey,
   sortBy: SortKey,
-  routeStationIds: Set<string>,
+  routeCandidateMap: Map<string, RouteCandidate>,
 ) {
-  const leftRouteBoost = routeStationIds.has(left.id) ? 0 : 1
-  const rightRouteBoost = routeStationIds.has(right.id) ? 0 : 1
-
-  if (leftRouteBoost !== rightRouteBoost) {
-    return leftRouteBoost - rightRouteBoost
+  if (sortBy === 'network') {
+    return compareStationNames(left, right)
   }
 
-  if (sortBy === 'network') {
-    return `${left.network}-${left.city}-${left.address}`.localeCompare(
-      `${right.network}-${right.city}-${right.address}`,
-      'lt',
+  if (sortBy === 'detour-asc') {
+    return (
+      compareNullableNumbers(
+        routeCandidateMap.get(left.id)?.estimatedDetourKm ?? null,
+        routeCandidateMap.get(right.id)?.estimatedDetourKm ?? null,
+      ) || compareStationNames(left, right)
+    )
+  }
+
+  if (sortBy === 'total-cost-asc') {
+    return (
+      compareNullableNumbers(
+        routeCandidateMap.get(left.id)?.totalEstimatedCost ?? null,
+        routeCandidateMap.get(right.id)?.totalEstimatedCost ?? null,
+      ) ||
+      compareNullableNumbers(
+        routeCandidateMap.get(left.id)?.estimatedDetourKm ?? null,
+        routeCandidateMap.get(right.id)?.estimatedDetourKm ?? null,
+      ) ||
+      compareStationNames(left, right)
     )
   }
 
@@ -114,18 +177,13 @@ function compareStations(
   const rightValue = right.prices[fuelKey]
 
   if (leftValue === null && rightValue === null) {
-    return left.network.localeCompare(right.network, 'lt')
+    return compareStationNames(left, right)
   }
 
-  if (leftValue === null) {
-    return 1
-  }
-
-  if (rightValue === null) {
-    return -1
-  }
-
-  return sortBy === 'price-desc' ? rightValue - leftValue : leftValue - rightValue
+  return (
+    compareNullableNumbers(leftValue, rightValue, sortBy === 'price-desc' ? 'desc' : 'asc') ||
+    compareStationNames(left, right)
+  )
 }
 
 function calculateRouteCandidate(
@@ -173,6 +231,7 @@ function App() {
   const [networkFilter, setNetworkFilter] = useState('all')
   const [municipalityFilter, setMunicipalityFilter] = useState('all')
   const [areaQuery, setAreaQuery] = useState('')
+  const [listVisibility, setListVisibility] = useState<ListVisibility>('all')
   const [sortBy, setSortBy] = useState<SortKey>('price-asc')
   const [selectionMode, setSelectionMode] = useState<'start' | 'end'>('start')
   const [comparisonMode, setComparisonMode] = useState<ComparisonMode>('along-route')
@@ -181,6 +240,8 @@ function App() {
   const [route, setRoute] = useState<RouteResult | null>(null)
   const [routeError, setRouteError] = useState<string | null>(null)
   const [isLoadingRoute, setIsLoadingRoute] = useState(false)
+  const [focusedStationId, setFocusedStationId] = useState<string | null>(null)
+  const [mapFocusTarget, setMapFocusTarget] = useState<MapFocusTarget | null>(null)
   const [corridorKm, setCorridorKm] = useState(2.5)
   const [plannedFuelLiters, setPlannedFuelLiters] = useState(40)
   const [fuelConsumptionPer100Km, setFuelConsumptionPer100Km] = useState(7)
@@ -244,8 +305,24 @@ function App() {
     [routeCandidates],
   )
 
+  const routeVisibleCandidates = useMemo(
+    () =>
+      routeCandidates.filter((candidate) =>
+        stationMatchesListVisibility(candidate.station, fuelKey, listVisibility, routeStationIds),
+      ),
+    [fuelKey, listVisibility, routeCandidates, routeStationIds],
+  )
+
+  const listVisibleStations = useMemo(
+    () =>
+      filteredStations.filter((station) =>
+        stationMatchesListVisibility(station, fuelKey, listVisibility, routeStationIds),
+      ),
+    [filteredStations, fuelKey, listVisibility, routeStationIds],
+  )
+
   const bestRouteCandidate = useMemo(() => {
-    const comparableCandidates = routeCandidates.filter(
+    const comparableCandidates = routeVisibleCandidates.filter(
       (candidate) => candidate.totalEstimatedCost !== null,
     )
 
@@ -271,22 +348,22 @@ function App() {
 
       return bestCandidate
     }, null as RouteCandidate | null)
-  }, [routeCandidates])
+  }, [routeVisibleCandidates])
 
   const sortedFilteredStations = useMemo(
     () =>
-      [...filteredStations].sort((left, right) =>
-        compareStations(left, right, fuelKey, sortBy, routeStationIds),
+      [...listVisibleStations].sort((left, right) =>
+        compareStations(left, right, fuelKey, sortBy, routeCandidateMap),
       ),
-    [filteredStations, fuelKey, routeStationIds, sortBy],
+    [fuelKey, listVisibleStations, routeCandidateMap, sortBy],
   )
 
   const sortedRouteStations = useMemo(
     () =>
-      routeCandidates
+      routeVisibleCandidates
         .map((candidate) => candidate.station)
-        .sort((left, right) => compareStations(left, right, fuelKey, sortBy, routeStationIds)),
-    [fuelKey, routeCandidates, routeStationIds, sortBy],
+        .sort((left, right) => compareStations(left, right, fuelKey, sortBy, routeCandidateMap)),
+    [fuelKey, routeCandidateMap, routeVisibleCandidates, sortBy],
   )
 
   const displayedStations = useMemo(() => {
@@ -301,6 +378,7 @@ function App() {
     return sortedRouteStations
   }, [bestRouteCandidate, comparisonMode, route, sortedFilteredStations, sortedRouteStations])
 
+  const topStationId = displayedStations.at(0)?.id ?? null
   const featuredStationId = bestRouteCandidate?.station.id ?? null
   const mappedStations = filteredStations.filter((station) => station.coordinates !== null).length
 
@@ -311,6 +389,8 @@ function App() {
     try {
       const nextSnapshot = await fetchTodayPrices()
       setSnapshot(nextSnapshot)
+      setFocusedStationId(null)
+      setMapFocusTarget(null)
     } catch (error) {
       setSnapshotError(error instanceof Error ? error.message : 'Nepavyko gauti šiandienos kainų.')
     } finally {
@@ -350,9 +430,23 @@ function App() {
   function handleClearRoute() {
     setRoute(null)
     setRouteError(null)
+    setFocusedStationId(null)
+    setMapFocusTarget(null)
     setStartPoint(null)
     setEndPoint(null)
     setSelectionMode('start')
+  }
+
+  function handleFocusStation(station: StationRecord) {
+    if (!station.coordinates) {
+      return
+    }
+
+    setFocusedStationId(station.id)
+    setMapFocusTarget((previousTarget) => ({
+      stationId: station.id,
+      requestId: (previousTarget?.requestId ?? 0) + 1,
+    }))
   }
 
   const routeResultLabel =
@@ -469,6 +563,18 @@ function App() {
               </select>
             </label>
             <label className="field">
+              <span>Sąraše rodyti</span>
+              <select
+                value={listVisibility}
+                onChange={(event) => setListVisibility(event.target.value as ListVisibility)}
+              >
+                <option value="all">Visas stoteles</option>
+                <option value="priced">Tik su pasirinkto kuro kaina</option>
+                <option value="mapped">Tik su koordinatėmis</option>
+                <option value="route">Tik palei maršrutą</option>
+              </select>
+            </label>
+            <label className="field">
               <span>Miestas / gatvė / paieška</span>
               <input
                 type="search"
@@ -483,6 +589,8 @@ function App() {
                 <option value="price-asc">Pigiausia viršuje</option>
                 <option value="price-desc">Brangiausia viršuje</option>
                 <option value="network">Pagal tinklą / adresą</option>
+                <option value="detour-asc">Trumpiausias papildomas kelias</option>
+                <option value="total-cost-asc">Mažiausia numatoma sustojimo kaina</option>
               </select>
             </label>
           </section>
@@ -665,7 +773,10 @@ function App() {
             route={route}
             activeSelection={selectionMode}
             routeStationIds={routeStationIds}
+            topStationId={topStationId}
             featuredStationId={comparisonMode === 'cheapest-route' ? featuredStationId : null}
+            focusedStationId={focusedStationId}
+            focusTarget={mapFocusTarget}
             startPoint={startPoint}
             endPoint={endPoint}
             onMapPick={handleMapPick}
@@ -681,8 +792,8 @@ function App() {
               </div>
               {route && (
                 <div className="route-chip">
-                  <strong>{routeCandidates.length}</strong>
-                  <span>maršruto kandidatų</span>
+                  <strong>{routeVisibleCandidates.length}</strong>
+                  <span>matomų maršruto kandidatų</span>
                 </div>
               )}
             </div>
@@ -711,23 +822,35 @@ function App() {
                   <tbody>
                     {displayedStations.map((station) => {
                       const isOnRoute = routeStationIds.has(station.id)
+                      const isTopStation = station.id === topStationId
                       const isBestStation = station.id === featuredStationId
+                      const isFocusedStation = station.id === focusedStationId
                       const routeCandidate = routeCandidateMap.get(station.id)
+                      const canFocusOnMap = station.coordinates !== null
 
                       return (
                         <tr
                           key={station.id}
                           className={[
                             'station-row',
+                            isTopStation ? 'station-row--top' : '',
                             isOnRoute ? 'station-row--highlight' : '',
                             isBestStation ? 'station-row--best' : '',
+                            isFocusedStation ? 'station-row--focused' : '',
                           ]
                             .filter(Boolean)
                             .join(' ')}
                         >
                           <td>
-                            <strong>{station.network}</strong>
-                            <div className="address-text">{station.address}</div>
+                            <button
+                              type="button"
+                              className="station-focus-button"
+                              onClick={() => handleFocusStation(station)}
+                              disabled={!canFocusOnMap}
+                            >
+                              <strong>{station.network}</strong>
+                              <div className="address-text">{station.address}</div>
+                            </button>
                           </td>
                           <td>
                             <span>{station.city}</span>
@@ -747,7 +870,11 @@ function App() {
                               : '—'}
                           </td>
                           <td>
-                            {isBestStation ? (
+                            {isFocusedStation ? (
+                              <span className="route-pill route-pill--focus">Žiūrima žemėlapyje</span>
+                            ) : isTopStation ? (
+                              <span className="route-pill route-pill--top">Pirmas sąraše</span>
+                            ) : isBestStation ? (
                               <span className="route-pill route-pill--best">Pigiausia</span>
                             ) : isOnRoute ? (
                               <span className="route-pill route-pill--on">Pakeliui</span>

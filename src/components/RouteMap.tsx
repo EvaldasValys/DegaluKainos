@@ -16,7 +16,13 @@ interface RouteMapProps {
   route: RouteResult | null
   activeSelection: 'start' | 'end'
   routeStationIds: Set<string>
+  topStationId: string | null
   featuredStationId: string | null
+  focusedStationId: string | null
+  focusTarget: {
+    stationId: string
+    requestId: number
+  } | null
   startPoint: RoutePoint | null
   endPoint: RoutePoint | null
   onMapPick: (point: RoutePoint) => void
@@ -34,7 +40,7 @@ function createMarker(className: string, label: string) {
 
 const stationIcon = createMarker('map-marker--station', '')
 const reachableIcon = createMarker('map-marker--reachable', '')
-const featuredIcon = createMarker('map-marker--featured', '€')
+const highlightedStationIcon = createMarker('map-marker--featured', '€')
 const startIcon = createMarker('map-marker--start', 'A')
 const endIcon = createMarker('map-marker--end', 'B')
 
@@ -92,12 +98,43 @@ function FitToContent({
   return null
 }
 
+function FocusOnStation({
+  focusTarget,
+  stations,
+}: Pick<RouteMapProps, 'focusTarget' | 'stations'>) {
+  const map = useMap()
+
+  useEffect(() => {
+    if (!focusTarget) {
+      return
+    }
+
+    const station = stations.find(
+      (candidate) =>
+        candidate.id === focusTarget.stationId && candidate.coordinates !== null,
+    )
+
+    if (!station?.coordinates) {
+      return
+    }
+
+    map.flyTo([station.coordinates.lat, station.coordinates.lng], Math.max(map.getZoom(), 15), {
+      duration: 0.8,
+    })
+  }, [focusTarget, map, stations])
+
+  return null
+}
+
 export function RouteMap({
   stations,
   route,
   activeSelection,
   routeStationIds,
+  topStationId,
   featuredStationId,
+  focusedStationId,
+  focusTarget,
   startPoint,
   endPoint,
   onMapPick,
@@ -113,6 +150,7 @@ export function RouteMap({
         />
         <LocationPicker activeSelection={activeSelection} onMapPick={onMapPick} />
         <FitToContent route={route} startPoint={startPoint} endPoint={endPoint} />
+        <FocusOnStation focusTarget={focusTarget} stations={stations} />
         {routeLine.length > 0 && (
           <Polyline positions={routeLine} pathOptions={{ color: '#ff6b35', weight: 5 }} />
         )}
@@ -122,9 +160,13 @@ export function RouteMap({
           .filter((station) => station.coordinates !== null)
           .map((station) => {
             const position = [station.coordinates!.lat, station.coordinates!.lng] as [number, number]
-            const icon =
+            const isHighlightedStation =
+              station.id === focusedStationId ||
+              station.id === topStationId ||
               station.id === featuredStationId
-                ? featuredIcon
+            const icon =
+              isHighlightedStation
+                ? highlightedStationIcon
                 : routeStationIds.has(station.id)
                   ? reachableIcon
                   : stationIcon
@@ -138,6 +180,18 @@ export function RouteMap({
                   <br />
                   {station.city}
                   <br />
+                  {station.id === focusedStationId && (
+                    <>
+                      <span>Pasirinkta iš sąrašo</span>
+                      <br />
+                    </>
+                  )}
+                  {station.id === topStationId && (
+                    <>
+                      <span>Pirmas rezultatas sąraše</span>
+                      <br />
+                    </>
+                  )}
                   {station.id === featuredStationId && (
                     <>
                       <span>Geriausias pasirinkimas</span>

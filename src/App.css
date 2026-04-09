@@ -387,14 +387,47 @@
   background: #f0fdf4;
 }
 
+.station-row--top {
+  background: #eff6ff;
+}
+
 .station-row--best {
   background: #fff7ed;
+}
+
+.station-row--focused {
+  background: #ecfeff;
 }
 
 .address-text {
   margin-top: 0.25rem;
   color: #64748b;
   font-size: 0.9rem;
+}
+
+.station-focus-button {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.station-focus-button:disabled {
+  cursor: default;
+}
+
+.station-focus-button:not(:disabled):hover strong {
+  color: #ea580c;
+}
+
+.station-focus-button:not(:disabled):focus-visible {
+  outline: 2px solid #ea580c;
+  outline-offset: 3px;
+  border-radius: 0.4rem;
 }
 
 .route-pill,
@@ -420,6 +453,16 @@
 .route-pill--best {
   background: #ffedd5;
   color: #c2410c;
+}
+
+.route-pill--top {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.route-pill--focus {
+  background: #cffafe;
+  color: #0f766e;
 }
 
 .route-chip {
