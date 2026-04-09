@@ -1,8 +1,18 @@
 import type { AddressSuggestion, RoutePoint } from '../../shared/types.js'
+import {
+  GEOCODE_CACHE_TTL_MS,
+  NEGATIVE_LOOKUP_CACHE_TTL_MS,
+  createAddressCacheKey,
+  createSuggestionCacheKey,
+  getSuggestionCacheTtlMs,
+} from '../../shared/cache.js'
+import { readTimedJsonCacheValue, writeTimedJsonCacheValue } from './cache-store.js'
 
 const GEOCODER_TIMEOUT_MS = 4000
 const DEFAULT_SUGGESTION_LIMIT = 5
 const LITHUANIA_COUNTRY_CODE = 'LT'
+const GEOCODE_CACHE_FILE = 'address-geocode-cache.json'
+const SUGGESTION_CACHE_FILE = 'address-suggestion-cache.json'
 const LITHUANIA_BBOX = {
   minLng: 20.93,
   minLat: 53.89,
@@ -123,6 +133,29 @@ async function fetchPhotonSuggestions(query: string, limit: number) {
     .filter((suggestion): suggestion is AddressSuggestion => suggestion !== null)
 }
 
+async function fetchCachedSuggestions(query: string, limit: number) {
+  const cacheKey = createSuggestionCacheKey(query, limit)
+  const cachedSuggestions = await readTimedJsonCacheValue<AddressSuggestion[]>(
+    SUGGESTION_CACHE_FILE,
+    cacheKey,
+  )
+
+  if (cachedSuggestions !== undefined) {
+    return cachedSuggestions
+  }
+
+  const suggestions = await fetchPhotonSuggestions(query, limit)
+
+  await writeTimedJsonCacheValue(
+    SUGGESTION_CACHE_FILE,
+    cacheKey,
+    suggestions,
+    getSuggestionCacheTtlMs(suggestions.length),
+  )
+
+  return suggestions
+}
+
 export async function suggestAddresses(
   address: string,
   limit = DEFAULT_SUGGESTION_LIMIT,
@@ -133,7 +166,7 @@ export async function suggestAddresses(
 
   for (const query of queries) {
     try {
-      const nextSuggestions = await fetchPhotonSuggestions(query, limit)
+      const nextSuggestions = await fetchCachedSuggestions(query, limit)
 
       for (const suggestion of nextSuggestions) {
         const key = suggestion.label.toLowerCase()
@@ -158,7 +191,22 @@ export async function suggestAddresses(
 }
 
 export async function geocodeAddress(address: string): Promise<RoutePoint | null> {
-  const suggestion = (await suggestAddresses(address, 1))[0]
+  const cacheKey = createAddressCacheKey(address)
+  const cachedPoint = await readTimedJsonCacheValue<RoutePoint | null>(GEOCODE_CACHE_FILE, cacheKey)
 
-  return suggestion?.point ?? null
+  if (cachedPoint !== undefined) {
+    return cachedPoint
+  }
+
+  const suggestion = (await suggestAddresses(address, 1))[0]
+  const point = suggestion?.point ?? null
+
+  await writeTimedJsonCacheValue(
+    GEOCODE_CACHE_FILE,
+    cacheKey,
+    point,
+    point ? GEOCODE_CACHE_TTL_MS : NEGATIVE_LOOKUP_CACHE_TTL_MS,
+  )
+
+  return point
 }

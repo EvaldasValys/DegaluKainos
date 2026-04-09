@@ -1,10 +1,21 @@
 import type { RoutePoint, RouteResult } from '../../shared/types.js'
+import { ROUTE_CACHE_TTL_MS, createRouteCacheKey } from '../../shared/cache.js'
+import { readTimedJsonCacheValue, writeTimedJsonCacheValue } from './cache-store.js'
+
+const ROUTE_CACHE_FILE = 'route-cache.json'
 
 function serializePoint(point: RoutePoint) {
   return `${point.lng},${point.lat}`
 }
 
 export async function fetchRoute(start: RoutePoint, end: RoutePoint): Promise<RouteResult> {
+  const cacheKey = createRouteCacheKey(start, end)
+  const cachedRoute = await readTimedJsonCacheValue<RouteResult>(ROUTE_CACHE_FILE, cacheKey)
+
+  if (cachedRoute) {
+    return cachedRoute
+  }
+
   const url = new URL(
     `https://router.project-osrm.org/route/v1/driving/${serializePoint(start)};${serializePoint(end)}`,
   )
@@ -38,9 +49,13 @@ export async function fetchRoute(start: RoutePoint, end: RoutePoint): Promise<Ro
     throw new Error('No route was returned for the selected points')
   }
 
-  return {
+  const routeResult = {
     distanceMeters: route.distance ?? 0,
     durationSeconds: route.duration ?? 0,
     geometry: route.geometry.coordinates,
-  }
+  } satisfies RouteResult
+
+  await writeTimedJsonCacheValue(ROUTE_CACHE_FILE, cacheKey, routeResult, ROUTE_CACHE_TTL_MS)
+
+  return routeResult
 }

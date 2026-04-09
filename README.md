@@ -147,6 +147,28 @@ For a public deployment:
 
 This keeps ENA workbook ingestion off the public request path.
 
+## Public-request caching
+
+To reduce Render invocations, bandwidth, and third-party traffic, the app now caches public reads at multiple layers:
+
+- `GET /api/prices/latest`
+  - validator-based HTTP caching with `ETag` and `Last-Modified`
+  - browser local cache for up to 24 hours
+- `GET /api/route`
+  - persistent disk cache in `data/cache/route-cache.json`
+  - browser and HTTP cache for 7 days
+  - cache keys round route points to 4 decimal places so nearby repeated requests reuse the same route
+- `GET /api/geocode`
+  - persistent disk cache in `data/cache/address-geocode-cache.json`
+  - browser and HTTP cache for 90 days
+  - failed lookups are cached for 1 hour
+- `GET /api/geocode/suggest`
+  - persistent disk cache in `data/cache/address-suggestion-cache.json`
+  - browser and HTTP cache for 24 hours
+  - empty suggestion sets are cached for 1 hour
+- built frontend assets
+  - served with long-lived immutable caching for 1 year
+
 ## External services still used live
 
 Even with published snapshots, the public app still makes live backend requests for:

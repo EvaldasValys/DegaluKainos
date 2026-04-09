@@ -1,6 +1,14 @@
 import express from 'express'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
+import type { PriceSnapshot } from '../shared/types.js'
+import {
+  GEOCODE_CACHE_TTL_MS,
+  NEGATIVE_LOOKUP_CACHE_TTL_MS,
+  ROUTE_CACHE_TTL_MS,
+  STATIC_ASSET_CACHE_MAX_AGE_SECONDS,
+  SUGGESTION_CACHE_TTL_MS,
+} from '../shared/cache.js'
 import { geocodeAddress, suggestAddresses } from './lib/geocoding-service.js'
 import { refreshLatestSnapshot } from './lib/price-service.js'
 import { fetchRoute } from './lib/routing-service.js'
@@ -11,6 +19,35 @@ const projectRoot = process.cwd()
 const isProduction = process.env.NODE_ENV === 'production'
 const port = Number(process.env.PORT ?? 5173)
 const adminRefreshToken = process.env.ADMIN_REFRESH_TOKEN?.trim() ?? ''
+const LATEST_SNAPSHOT_CACHE_CONTROL = 'public, no-cache, stale-while-revalidate=31536000'
+
+function setPublicCache(response: express.Response, maxAgeSeconds: number, immutable = false) {
+  response.set(
+    'Cache-Control',
+    immutable ? `public, max-age=${maxAgeSeconds}, immutable` : `public, max-age=${maxAgeSeconds}`,
+  )
+}
+
+function createSnapshotEtag(snapshot: PriceSnapshot) {
+  return `"${snapshot.snapshotDate}-${Date.parse(snapshot.fetchedAt)}-${snapshot.stations.length}"`
+}
+
+function isSnapshotFresh(request: express.Request, snapshot: PriceSnapshot) {
+  const ifNoneMatch = request.get('if-none-match')
+  const snapshotEtag = createSnapshotEtag(snapshot)
+
+  if (ifNoneMatch === snapshotEtag) {
+    return true
+  }
+
+  const ifModifiedSince = request.get('if-modified-since')
+
+  if (!ifModifiedSince) {
+    return false
+  }
+
+  return Date.parse(ifModifiedSince) >= Date.parse(snapshot.fetchedAt)
+}
 
 function parseRoutePoint(value: string | undefined) {
   if (!value) {
@@ -41,7 +78,7 @@ async function createServer() {
 
   app.disable('x-powered-by')
 
-  app.get('/api/prices/latest', async (_request, response) => {
+  app.get('/api/prices/latest', async (request, response) => {
     try {
       const snapshot = await readLatestPublishedSnapshot()
 
@@ -49,6 +86,17 @@ async function createServer() {
         response.status(404).json({
           error: 'No published snapshot is available yet. Run an admin refresh first.',
         })
+        return
+      }
+
+      response.set({
+        'Cache-Control': LATEST_SNAPSHOT_CACHE_CONTROL,
+        ETag: createSnapshotEtag(snapshot),
+        'Last-Modified': new Date(snapshot.fetchedAt).toUTCString(),
+      })
+
+      if (isSnapshotFresh(request, snapshot)) {
+        response.status(304).end()
         return
       }
 
@@ -107,6 +155,7 @@ async function createServer() {
 
     try {
       const route = await fetchRoute(start, end)
+      setPublicCache(response, Math.floor(ROUTE_CACHE_TTL_MS / 1000), true)
       response.json(route)
     } catch (error) {
       response.status(502).json({
@@ -127,10 +176,12 @@ async function createServer() {
       const point = await geocodeAddress(query)
 
       if (!point) {
+        setPublicCache(response, Math.floor(NEGATIVE_LOOKUP_CACHE_TTL_MS / 1000))
         response.status(404).json({ error: 'Address could not be geocoded.' })
         return
       }
 
+      setPublicCache(response, Math.floor(GEOCODE_CACHE_TTL_MS / 1000), true)
       response.json(point)
     } catch (error) {
       response.status(502).json({
@@ -149,6 +200,10 @@ async function createServer() {
 
     try {
       const suggestions = await suggestAddresses(query)
+      setPublicCache(
+        response,
+        Math.floor((suggestions.length > 0 ? SUGGESTION_CACHE_TTL_MS : NEGATIVE_LOOKUP_CACHE_TTL_MS) / 1000),
+      )
       response.json(suggestions)
     } catch (error) {
       response.status(502).json({
@@ -159,8 +214,15 @@ async function createServer() {
 
   if (isProduction) {
     const clientDist = path.join(projectRoot, 'dist', 'client')
-    app.use(express.static(clientDist))
+    app.use(
+      express.static(clientDist, {
+        index: false,
+        maxAge: STATIC_ASSET_CACHE_MAX_AGE_SECONDS * 1000,
+        immutable: true,
+      }),
+    )
     app.use(async (_request, response) => {
+      response.set('Cache-Control', 'no-cache')
       response.sendFile(path.join(clientDist, 'index.html'))
     })
     return app
