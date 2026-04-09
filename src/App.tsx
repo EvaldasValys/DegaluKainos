@@ -558,8 +558,8 @@ function App() {
                 onChange={(event) => setCorridorKm(Number(event.target.value))}
               />
             </label>
-            <div className="field-grid">
-              <label className="field">
+            <div className="field-grid field-grid--compact">
+              <label className="field field--compact">
                 <span>Planuojamas pirkimas (litrai)</span>
                 <input
                   type="number"
@@ -571,7 +571,7 @@ function App() {
                   }
                 />
               </label>
-              <label className="field">
+              <label className="field field--compact">
                 <span>Sąnaudos l/100 km</span>
                 <input
                   type="number"

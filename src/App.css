@@ -153,6 +153,26 @@
   gap: 0.75rem;
 }
 
+.field-grid--compact {
+  align-items: end;
+}
+
+.field--compact {
+  margin-bottom: 0;
+}
+
+.field--compact span {
+  font-size: 0.86rem;
+  line-height: 1.25;
+  min-height: 2.2em;
+}
+
+.field--compact input {
+  width: 100%;
+  max-width: 8.5rem;
+  justify-self: start;
+}
+
 .field input,
 .field select,
 .primary-button,
