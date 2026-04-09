@@ -45,6 +45,8 @@ You publish fresh price data yourself:
 | `npm run start` | Start the production server |
 | `npm run refresh:snapshot:dev` | Refresh and publish the latest snapshot in development |
 | `npm run refresh:snapshot` | Refresh and publish the latest snapshot from the production build |
+| `npm run refresh:snapshot:auto:dev` | Cron-safe development refresh that skips when today is already published |
+| `npm run refresh:snapshot:auto` | Cron-safe production refresh that skips when today is already published |
 
 ## Local development
 
@@ -77,6 +79,21 @@ This writes:
 
 - `data/snapshots/latest.json`
 - `data/snapshots/YYYY-MM-DD.json`
+
+## Cron-safe auto refresh
+
+If you want a cron job to poll during a small time window, use:
+
+```bash
+npm run refresh:snapshot:auto
+```
+
+This command:
+
+- exits successfully if today's snapshot is already published
+- tries to publish today's snapshot if it is not published yet
+- exits successfully if today's ENA workbook is still not available
+- only fails for real errors that need attention
 
 ## Optional protected refresh endpoint
 

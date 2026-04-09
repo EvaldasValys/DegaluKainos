@@ -9,6 +9,8 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "start": "NODE_ENV=production node dist/server/index.js",
+    "refresh:snapshot:auto": "NODE_ENV=production node dist/server/scripts/refresh-snapshot-auto.js",
+    "refresh:snapshot:auto:dev": "tsx server/scripts/refresh-snapshot-auto.ts",
     "refresh:snapshot": "NODE_ENV=production node dist/server/scripts/refresh-snapshot.js",
     "refresh:snapshot:dev": "tsx server/scripts/refresh-snapshot.ts"
   },
