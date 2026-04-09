@@ -23,6 +23,7 @@ type AddressFieldKey = 'start' | 'end'
 
 const AUTOCOMPLETE_MIN_QUERY_LENGTH = 3
 const AUTOCOMPLETE_DEBOUNCE_MS = 250
+const DEFAULT_BLACKLIST = ['Jozita']
 
 interface RouteCandidate {
   station: StationRecord
@@ -112,6 +113,26 @@ function formatKilometers(distanceKm: number) {
 
 function formatLiters(liters: number) {
   return `${quantityFormatter.format(liters)} l`
+}
+
+function normalizeNetworkName(value: string) {
+  return value.trim().toLowerCase()
+}
+
+function addBlacklistedNetwork(existingNetworks: string[], value: string) {
+  const trimmedValue = value.trim()
+
+  if (!trimmedValue) {
+    return existingNetworks
+  }
+
+  const normalizedValue = normalizeNetworkName(trimmedValue)
+
+  if (existingNetworks.some((network) => normalizeNetworkName(network) === normalizedValue)) {
+    return existingNetworks
+  }
+
+  return [...existingNetworks, trimmedValue].sort((left, right) => left.localeCompare(right, 'lt'))
 }
 
 function useAddressSuggestions(query: string, enabled: boolean) {
@@ -357,6 +378,8 @@ function App() {
   const [endPoint, setEndPoint] = useState<RoutePoint | null>(null)
   const [startAddress, setStartAddress] = useState('')
   const [endAddress, setEndAddress] = useState('')
+  const [blacklistedNetworks, setBlacklistedNetworks] = useState<string[]>(DEFAULT_BLACKLIST)
+  const [blacklistInput, setBlacklistInput] = useState('')
   const [activeAddressField, setActiveAddressField] = useState<AddressFieldKey | null>(null)
   const [route, setRoute] = useState<RouteResult | null>(null)
   const [routeError, setRouteError] = useState<string | null>(null)
@@ -372,6 +395,17 @@ function App() {
     return Array.from(values).sort((left, right) => left.localeCompare(right, 'lt'))
   }, [snapshot])
 
+  const blacklistedNetworkKeys = useMemo(
+    () => new Set(blacklistedNetworks.map((network) => normalizeNetworkName(network))),
+    [blacklistedNetworks],
+  )
+
+  const selectableNetworks = useMemo(
+    () =>
+      networks.filter((network) => !blacklistedNetworkKeys.has(normalizeNetworkName(network))),
+    [blacklistedNetworkKeys, networks],
+  )
+
   const municipalities = useMemo(() => {
     const values = new Set((snapshot?.stations ?? []).map((station) => station.municipality))
     return Array.from(values).sort((left, right) => left.localeCompare(right, 'lt'))
@@ -381,6 +415,10 @@ function App() {
     const query = areaQuery.trim().toLowerCase()
 
     return (snapshot?.stations ?? []).filter((station) => {
+      if (blacklistedNetworkKeys.has(normalizeNetworkName(station.network))) {
+        return false
+      }
+
       if (networkFilter !== 'all' && station.network !== networkFilter) {
         return false
       }
@@ -395,7 +433,7 @@ function App() {
 
       return true
     })
-  }, [areaQuery, municipalityFilter, networkFilter, snapshot])
+  }, [areaQuery, blacklistedNetworkKeys, municipalityFilter, networkFilter, snapshot])
 
   const routeCandidates = useMemo(() => {
     if (!route) {
@@ -504,7 +542,6 @@ function App() {
   const emptyPointLabel =
     pointInputMode === 'map' ? 'Pasirinkite žemėlapyje' : 'Įveskite adresą'
   const featuredStationId = bestRouteCandidate?.station.id ?? null
-  const mappedStations = filteredStations.filter((station) => station.coordinates !== null).length
   const isStartAutocompleteActive =
     pointInputMode === 'address' && activeAddressField === 'start'
   const isEndAutocompleteActive = pointInputMode === 'address' && activeAddressField === 'end'
@@ -514,6 +551,19 @@ function App() {
     endAddress,
     isEndAutocompleteActive,
   )
+  const hiddenStationCount = useMemo(
+    () =>
+      (snapshot?.stations ?? []).filter((station) =>
+        blacklistedNetworkKeys.has(normalizeNetworkName(station.network)),
+      ).length,
+    [blacklistedNetworkKeys, snapshot],
+  )
+
+  useEffect(() => {
+    if (networkFilter !== 'all' && blacklistedNetworkKeys.has(normalizeNetworkName(networkFilter))) {
+      setNetworkFilter('all')
+    }
+  }, [blacklistedNetworkKeys, networkFilter])
 
   async function handleFetchSnapshot() {
     setIsLoadingSnapshot(true)
@@ -623,6 +673,29 @@ function App() {
     if (activeAddressField === field) {
       setActiveAddressField(null)
     }
+  }
+
+  function handleAddBlacklistedNetwork() {
+    const trimmedValue = blacklistInput.trim()
+
+    if (!trimmedValue) {
+      return
+    }
+
+    const matchedNetwork =
+      networks.find((network) => normalizeNetworkName(network) === normalizeNetworkName(trimmedValue)) ??
+      trimmedValue
+
+    setBlacklistedNetworks((previousNetworks) => addBlacklistedNetwork(previousNetworks, matchedNetwork))
+    setBlacklistInput('')
+  }
+
+  function handleRemoveBlacklistedNetwork(network: string) {
+    setBlacklistedNetworks((previousNetworks) =>
+      previousNetworks.filter(
+        (candidateNetwork) => normalizeNetworkName(candidateNetwork) !== normalizeNetworkName(network),
+      ),
+    )
   }
 
   function handleClearRoute() {
@@ -956,7 +1029,7 @@ function App() {
                 onChange={(event) => setNetworkFilter(event.target.value)}
               >
                 <option value="all">Visi tinklai</option>
-                {networks.map((network) => (
+                {selectableNetworks.map((network) => (
                   <option key={network} value={network}>
                     {network}
                   </option>
@@ -1011,13 +1084,61 @@ function App() {
           </section>
 
           <section className="panel">
-            <h2>Aprėptis</h2>
-            <ul className="coverage-list">
-              <li>{`Koordinatės iš talpyklos: ${snapshot?.coverage.cacheMatches ?? 0}`}</li>
-              <li>{`Sutapatinta su OpenStreetMap stotelėmis: ${snapshot?.coverage.osmMatches ?? 0}`}</li>
-              <li>{`Papildomai geokoduota: ${snapshot?.coverage.geocoderMatches ?? 0}`}</li>
-              <li>{`Matomų stotelių žemėlapyje: ${mappedStations}`}</li>
-            </ul>
+            <h2>Degalinių juodasis sąrašas</h2>
+            <p className="panel-note">
+              Šio sąrašo tinklai nerodomi žemėlapyje ir neįtraukiami į maršruto bei sąrašo
+              rezultatus. <strong>Jozita</strong> įtraukta pagal nutylėjimą.
+            </p>
+            <div className="blacklist-add">
+              <label className="field field--with-suggestions">
+                <span>Pridėti tinklą</span>
+                <input
+                  type="text"
+                  list="network-blacklist-options"
+                  value={blacklistInput}
+                  onChange={(event) => setBlacklistInput(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      handleAddBlacklistedNetwork()
+                    }
+                  }}
+                  placeholder="Pvz. Viada"
+                />
+              </label>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={handleAddBlacklistedNetwork}
+                disabled={!blacklistInput.trim()}
+              >
+                Pridėti
+              </button>
+              <datalist id="network-blacklist-options">
+                {selectableNetworks.map((network) => (
+                  <option key={network} value={network} />
+                ))}
+              </datalist>
+            </div>
+            {blacklistedNetworks.length > 0 ? (
+              <div className="blacklist-list">
+                {blacklistedNetworks.map((network) => (
+                  <span key={network} className="blacklist-chip">
+                    <span>{network}</span>
+                    <button
+                      type="button"
+                      aria-label={`Pašalinti ${network} iš juodojo sąrašo`}
+                      onClick={() => handleRemoveBlacklistedNetwork(network)}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p className="panel-note">Juodasis sąrašas šiuo metu tuščias.</p>
+            )}
+            <p className="panel-note">{`Šiuo metu paslėpta stotelių: ${hiddenStationCount}`}</p>
           </section>
         </aside>
 
