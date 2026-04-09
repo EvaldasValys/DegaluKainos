@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { lineString, point } from '@turf/helpers'
 import pointToLineDistance from '@turf/point-to-line-distance'
 import {
+  type AddressSuggestion,
   FUEL_KEYS,
   FUEL_LABELS,
   type FuelKey,
@@ -11,12 +12,17 @@ import {
   type StationRecord,
 } from '../shared/types'
 import { RouteMap } from './components/RouteMap'
-import { fetchRoute, fetchTodayPrices } from './lib/api'
+import { fetchAddressPoint, fetchAddressSuggestions, fetchRoute, fetchTodayPrices } from './lib/api'
 import './App.css'
 
 type SortKey = 'price-asc' | 'price-desc' | 'network' | 'detour-asc' | 'total-cost-asc'
 type ComparisonMode = 'along-route' | 'cheapest-route'
 type ListVisibility = 'all' | 'priced' | 'mapped' | 'route'
+type PointInputMode = 'map' | 'address'
+type AddressFieldKey = 'start' | 'end'
+
+const AUTOCOMPLETE_MIN_QUERY_LENGTH = 3
+const AUTOCOMPLETE_DEBOUNCE_MS = 250
 
 interface RouteCandidate {
   station: StationRecord
@@ -33,6 +39,19 @@ interface RouteCandidate {
 interface MapFocusTarget {
   stationId: string
   requestId: number
+}
+
+interface AddressAutocompleteFieldProps {
+  label: string
+  value: string
+  placeholder: string
+  isActive: boolean
+  isLoading: boolean
+  suggestions: AddressSuggestion[]
+  onChange: (value: string) => void
+  onFocus: () => void
+  onBlur: () => void
+  onSelectSuggestion: (suggestion: AddressSuggestion) => void
 }
 
 const fuelPriceFormatter = new Intl.NumberFormat('lt-LT', {
@@ -79,9 +98,9 @@ function formatDistance(distanceMeters: number) {
   return `${(distanceMeters / 1000).toFixed(1)} km`
 }
 
-function formatPoint(pointValue: RoutePoint | null) {
+function formatPoint(pointValue: RoutePoint | null, emptyLabel = 'Pasirinkite žemėlapyje') {
   if (!pointValue) {
-    return 'Pasirinkite žemėlapyje'
+    return emptyLabel
   }
 
   return `${coordinateFormatter.format(pointValue.lat)}, ${coordinateFormatter.format(pointValue.lng)}`
@@ -93,6 +112,104 @@ function formatKilometers(distanceKm: number) {
 
 function formatLiters(liters: number) {
   return `${quantityFormatter.format(liters)} l`
+}
+
+function useAddressSuggestions(query: string, enabled: boolean) {
+  const [suggestions, setSuggestions] = useState<AddressSuggestion[]>([])
+  const [isLoading, setIsLoading] = useState(false)
+
+  useEffect(() => {
+    const normalizedQuery = query.trim()
+
+    if (!enabled || normalizedQuery.length < AUTOCOMPLETE_MIN_QUERY_LENGTH) {
+      setSuggestions([])
+      setIsLoading(false)
+      return
+    }
+
+    let ignore = false
+    setSuggestions([])
+    setIsLoading(true)
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        const nextSuggestions = await fetchAddressSuggestions(normalizedQuery)
+
+        if (!ignore) {
+          setSuggestions(nextSuggestions)
+        }
+      } catch {
+        if (!ignore) {
+          setSuggestions([])
+        }
+      } finally {
+        if (!ignore) {
+          setIsLoading(false)
+        }
+      }
+    }, AUTOCOMPLETE_DEBOUNCE_MS)
+
+    return () => {
+      ignore = true
+      window.clearTimeout(timeoutId)
+    }
+  }, [enabled, query])
+
+  return { suggestions, isLoading }
+}
+
+function AddressAutocompleteField({
+  label,
+  value,
+  placeholder,
+  isActive,
+  isLoading,
+  suggestions,
+  onChange,
+  onFocus,
+  onBlur,
+  onSelectSuggestion,
+}: AddressAutocompleteFieldProps) {
+  const showSuggestions = isActive && value.trim().length >= AUTOCOMPLETE_MIN_QUERY_LENGTH
+
+  return (
+    <div className="autocomplete-field">
+      <label className="field field--with-suggestions">
+        <span>{label}</span>
+        <input
+          type="text"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          onFocus={onFocus}
+          onBlur={onBlur}
+          placeholder={placeholder}
+          autoComplete="off"
+        />
+      </label>
+      {showSuggestions && (
+        <div className="autocomplete-menu">
+          {isLoading ? (
+            <p className="autocomplete-status">Ieškoma adresų...</p>
+          ) : suggestions.length > 0 ? (
+            suggestions.map((suggestion) => (
+              <button
+                key={`${suggestion.label}-${suggestion.point.lat}-${suggestion.point.lng}`}
+                type="button"
+                className="autocomplete-option"
+                onMouseDown={(event) => {
+                  event.preventDefault()
+                  onSelectSuggestion(suggestion)
+                }}
+              >
+                {suggestion.label}
+              </button>
+            ))
+          ) : (
+            <p className="autocomplete-status">Neradome adresų pagal šią įvestį.</p>
+          )}
+        </div>
+      )}
+    </div>
+  )
 }
 
 function compareNullableNumbers(
@@ -234,9 +351,13 @@ function App() {
   const [listVisibility, setListVisibility] = useState<ListVisibility>('all')
   const [sortBy, setSortBy] = useState<SortKey>('price-asc')
   const [selectionMode, setSelectionMode] = useState<'start' | 'end'>('start')
+  const [pointInputMode, setPointInputMode] = useState<PointInputMode>('map')
   const [comparisonMode, setComparisonMode] = useState<ComparisonMode>('along-route')
   const [startPoint, setStartPoint] = useState<RoutePoint | null>(null)
   const [endPoint, setEndPoint] = useState<RoutePoint | null>(null)
+  const [startAddress, setStartAddress] = useState('')
+  const [endAddress, setEndAddress] = useState('')
+  const [activeAddressField, setActiveAddressField] = useState<AddressFieldKey | null>(null)
   const [route, setRoute] = useState<RouteResult | null>(null)
   const [routeError, setRouteError] = useState<string | null>(null)
   const [isLoadingRoute, setIsLoadingRoute] = useState(false)
@@ -379,8 +500,20 @@ function App() {
   }, [bestRouteCandidate, comparisonMode, route, sortedFilteredStations, sortedRouteStations])
 
   const topStationId = displayedStations.at(0)?.id ?? null
+  const activePointSelectionMode = pointInputMode === 'map' ? selectionMode : 'none'
+  const emptyPointLabel =
+    pointInputMode === 'map' ? 'Pasirinkite žemėlapyje' : 'Įveskite adresą'
   const featuredStationId = bestRouteCandidate?.station.id ?? null
   const mappedStations = filteredStations.filter((station) => station.coordinates !== null).length
+  const isStartAutocompleteActive =
+    pointInputMode === 'address' && activeAddressField === 'start'
+  const isEndAutocompleteActive = pointInputMode === 'address' && activeAddressField === 'end'
+  const { suggestions: startSuggestions, isLoading: isLoadingStartSuggestions } =
+    useAddressSuggestions(startAddress, isStartAutocompleteActive)
+  const { suggestions: endSuggestions, isLoading: isLoadingEndSuggestions } = useAddressSuggestions(
+    endAddress,
+    isEndAutocompleteActive,
+  )
 
   async function handleFetchSnapshot() {
     setIsLoadingSnapshot(true)
@@ -399,25 +532,57 @@ function App() {
   }
 
   async function handleFetchRoute() {
-    if (!startPoint || !endPoint) {
-      setRouteError('Pirmiausia pasirinkite abu taškus A ir B žemėlapyje.')
-      return
-    }
-
     setIsLoadingRoute(true)
     setRouteError(null)
 
     try {
-      const nextRoute = await fetchRoute(startPoint, endPoint)
+      let nextStartPoint = startPoint
+      let nextEndPoint = endPoint
+
+      if (pointInputMode === 'address') {
+        if (!startAddress.trim() || !endAddress.trim()) {
+          setRouteError('Pirmiausia įveskite abu adresus A ir B.')
+          setIsLoadingRoute(false)
+          return
+        }
+
+        if (!nextStartPoint || !nextEndPoint) {
+          const [geocodedStartPoint, geocodedEndPoint] = await Promise.all([
+            nextStartPoint ? Promise.resolve(nextStartPoint) : fetchAddressPoint(startAddress),
+            nextEndPoint ? Promise.resolve(nextEndPoint) : fetchAddressPoint(endAddress),
+          ])
+
+          nextStartPoint = geocodedStartPoint
+          nextEndPoint = geocodedEndPoint
+          setStartPoint(geocodedStartPoint)
+          setEndPoint(geocodedEndPoint)
+        }
+      }
+
+      if (!nextStartPoint || !nextEndPoint) {
+        setRouteError('Pirmiausia pasirinkite abu taškus A ir B žemėlapyje.')
+        setIsLoadingRoute(false)
+        return
+      }
+
+      const nextRoute = await fetchRoute(nextStartPoint, nextEndPoint)
       setRoute(nextRoute)
     } catch (error) {
-      setRouteError(error instanceof Error ? error.message : 'Nepavyko apskaičiuoti maršruto.')
+      setRouteError(
+        error instanceof Error
+          ? error.message
+          : 'Nepavyko apskaičiuoti maršruto pagal pasirinktus taškus.',
+      )
     } finally {
       setIsLoadingRoute(false)
     }
   }
 
   function handleMapPick(pointValue: RoutePoint) {
+    if (pointInputMode !== 'map') {
+      return
+    }
+
     if (selectionMode === 'start') {
       setStartPoint(pointValue)
       setSelectionMode('end')
@@ -425,6 +590,39 @@ function App() {
     }
 
     setEndPoint(pointValue)
+  }
+
+  function handleAddressChange(field: AddressFieldKey, value: string) {
+    setRouteError(null)
+
+    if (field === 'start') {
+      setStartAddress(value)
+      setStartPoint(null)
+      return
+    }
+
+    setEndAddress(value)
+    setEndPoint(null)
+  }
+
+  function handleAddressSuggestionSelect(field: AddressFieldKey, suggestion: AddressSuggestion) {
+    setRouteError(null)
+
+    if (field === 'start') {
+      setStartAddress(suggestion.label)
+      setStartPoint(suggestion.point)
+    } else {
+      setEndAddress(suggestion.label)
+      setEndPoint(suggestion.point)
+    }
+
+    setActiveAddressField(null)
+  }
+
+  function handleAddressBlur(field: AddressFieldKey) {
+    if (activeAddressField === field) {
+      setActiveAddressField(null)
+    }
   }
 
   function handleClearRoute() {
@@ -453,6 +651,223 @@ function App() {
     comparisonMode === 'cheapest-route'
       ? 'Pigiausias sustojimas maršrute'
       : 'Stotelės palei maršrutą'
+
+  const routePanel = (
+    <section className="panel">
+      <h2>Maršrutas ir palyginimas</h2>
+      <div className="toggle-group">
+        <button
+          type="button"
+          className={
+            pointInputMode === 'map' ? 'toggle-button toggle-button--active' : 'toggle-button'
+          }
+          onClick={() => {
+            setPointInputMode('map')
+            setActiveAddressField(null)
+          }}
+        >
+          Rinkti taškus žemėlapyje
+        </button>
+        <button
+          type="button"
+          className={
+            pointInputMode === 'address' ? 'toggle-button toggle-button--active' : 'toggle-button'
+          }
+          onClick={() => {
+            setPointInputMode('address')
+            setActiveAddressField(null)
+          }}
+        >
+          Įvesti A ir B adresus
+        </button>
+      </div>
+      <div className="toggle-group">
+        <button
+          type="button"
+          className={
+            comparisonMode === 'along-route'
+              ? 'toggle-button toggle-button--active'
+              : 'toggle-button'
+          }
+          onClick={() => setComparisonMode('along-route')}
+        >
+          Visos stotelės palei maršrutą
+        </button>
+        <button
+          type="button"
+          className={
+            comparisonMode === 'cheapest-route'
+              ? 'toggle-button toggle-button--active'
+              : 'toggle-button'
+          }
+          onClick={() => setComparisonMode('cheapest-route')}
+        >
+          Pigiausias sustojimas
+        </button>
+      </div>
+      {pointInputMode === 'map' ? (
+        <div className="route-actions">
+          <button
+            type="button"
+            className={
+              selectionMode === 'start'
+                ? 'secondary-button secondary-button--active'
+                : 'secondary-button'
+            }
+            onClick={() => setSelectionMode('start')}
+          >
+            Rinkti tašką A
+          </button>
+          <button
+            type="button"
+            className={
+              selectionMode === 'end'
+                ? 'secondary-button secondary-button--active'
+                : 'secondary-button'
+            }
+            onClick={() => setSelectionMode('end')}
+          >
+            Rinkti tašką B
+          </button>
+        </div>
+      ) : (
+        <div className="address-entry">
+          <AddressAutocompleteField
+            label="Adresas A"
+            value={startAddress}
+            placeholder="Pvz. Gedimino pr. 1, Vilnius"
+            isActive={isStartAutocompleteActive}
+            isLoading={isLoadingStartSuggestions}
+            suggestions={startSuggestions}
+            onChange={(value) => handleAddressChange('start', value)}
+            onFocus={() => setActiveAddressField('start')}
+            onBlur={() => handleAddressBlur('start')}
+            onSelectSuggestion={(suggestion) => handleAddressSuggestionSelect('start', suggestion)}
+          />
+          <AddressAutocompleteField
+            label="Adresas B"
+            value={endAddress}
+            placeholder="Pvz. Laisvės al. 1, Kaunas"
+            isActive={isEndAutocompleteActive}
+            isLoading={isLoadingEndSuggestions}
+            suggestions={endSuggestions}
+            onChange={(value) => handleAddressChange('end', value)}
+            onFocus={() => setActiveAddressField('end')}
+            onBlur={() => handleAddressBlur('end')}
+            onSelectSuggestion={(suggestion) => handleAddressSuggestionSelect('end', suggestion)}
+          />
+        </div>
+      )}
+      <div className="point-summary">
+        <div>
+          <span>Taškas A</span>
+          <strong>{formatPoint(startPoint, emptyPointLabel)}</strong>
+        </div>
+        <div>
+          <span>Taškas B</span>
+          <strong>{formatPoint(endPoint, emptyPointLabel)}</strong>
+        </div>
+      </div>
+      <label className="field">
+        <span>{`Maksimalus nuokrypis nuo maršruto: ${corridorKm.toFixed(1)} km`}</span>
+        <input
+          type="range"
+          min="0.5"
+          max="10"
+          step="0.5"
+          value={corridorKm}
+          onChange={(event) => setCorridorKm(Number(event.target.value))}
+        />
+      </label>
+      <div className="field-grid field-grid--compact">
+        <label className="field field--compact">
+          <span>Planuojamas pirkimas (litrai)</span>
+          <input
+            type="number"
+            min="1"
+            step="1"
+            value={plannedFuelLiters}
+            onChange={(event) => setPlannedFuelLiters(Math.max(Number(event.target.value) || 0, 1))}
+          />
+        </label>
+        <label className="field field--compact">
+          <span>Sąnaudos l/100 km</span>
+          <input
+            type="number"
+            min="0.1"
+            step="0.1"
+            value={fuelConsumptionPer100Km}
+            onChange={(event) =>
+              setFuelConsumptionPer100Km(Math.max(Number(event.target.value) || 0, 0.1))
+            }
+          />
+        </label>
+      </div>
+      <p className="panel-note">
+        Pigiausias sustojimas skaičiuojamas pagal pasirinktą kuro rūšį, planuojamą litražą ir
+        numanomą papildomą kelią iki stotelės ir atgal į maršrutą. Taškus galite pasirinkti
+        žemėlapyje arba įvesti adresais su automatiniais pasiūlymais.
+      </p>
+      <div className="route-actions">
+        <button
+          type="button"
+          className="primary-button"
+          onClick={handleFetchRoute}
+          disabled={isLoadingRoute || filteredStations.length === 0}
+        >
+          {isLoadingRoute ? 'Skaičiuojama...' : 'Rasti degalines palei maršrutą'}
+        </button>
+        <button type="button" className="secondary-button" onClick={handleClearRoute}>
+          Išvalyti
+        </button>
+      </div>
+      {route && (
+        <p className="route-stats">
+          {`Maršrutas: ${formatDistance(route.distanceMeters)} • ${formatDuration(route.durationSeconds)}`}
+        </p>
+      )}
+      {routeError && <p className="route-error">{routeError}</p>}
+      {route && comparisonMode === 'cheapest-route' && bestRouteCandidate && (
+        <div className="result-card">
+          <div className="result-card__header">
+            <div>
+              <span className="summary-label">Pigiausias sustojimas</span>
+              <strong>{bestRouteCandidate.station.network}</strong>
+            </div>
+            <span className="route-pill route-pill--best">Geriausias pasirinkimas</span>
+          </div>
+          <p className="address-text">{bestRouteCandidate.station.address}</p>
+          <div className="metric-grid">
+            <div className="metric-card">
+              <span className="metric-label">Kaina už litrą</span>
+              <strong>{formatFuelPrice(bestRouteCandidate.fuelPrice)}</strong>
+            </div>
+            <div className="metric-card">
+              <span className="metric-label">Pirkimo kaina</span>
+              <strong>{formatMoney(bestRouteCandidate.purchaseCost)}</strong>
+            </div>
+            <div className="metric-card">
+              <span className="metric-label">Papildomas kelias</span>
+              <strong>{formatKilometers(bestRouteCandidate.estimatedDetourKm)}</strong>
+            </div>
+            <div className="metric-card">
+              <span className="metric-label">Papildomos sąnaudos</span>
+              <strong>{formatLiters(bestRouteCandidate.detourFuelLiters)}</strong>
+            </div>
+            <div className="metric-card metric-card--wide">
+              <span className="metric-label">Numatoma bendra sustojimo kaina</span>
+              <strong>{formatMoney(bestRouteCandidate.totalEstimatedCost)}</strong>
+            </div>
+          </div>
+        </div>
+      )}
+      {route && comparisonMode === 'cheapest-route' && !bestRouteCandidate && (
+        <p className="panel-note">
+          Šiuo metu palei pasirinktą maršrutą nėra stotelių su žinoma pasirinkto kuro kaina.
+        </p>
+      )}
+    </section>
+  )
 
   return (
     <div className="app-shell">
@@ -596,167 +1011,6 @@ function App() {
           </section>
 
           <section className="panel">
-            <h2>Maršrutas ir palyginimas</h2>
-            <div className="toggle-group">
-              <button
-                type="button"
-                className={
-                  comparisonMode === 'along-route'
-                    ? 'toggle-button toggle-button--active'
-                    : 'toggle-button'
-                }
-                onClick={() => setComparisonMode('along-route')}
-              >
-                Visos stotelės palei maršrutą
-              </button>
-              <button
-                type="button"
-                className={
-                  comparisonMode === 'cheapest-route'
-                    ? 'toggle-button toggle-button--active'
-                    : 'toggle-button'
-                }
-                onClick={() => setComparisonMode('cheapest-route')}
-              >
-                Pigiausias sustojimas
-              </button>
-            </div>
-            <div className="route-actions">
-              <button
-                type="button"
-                className={
-                  selectionMode === 'start'
-                    ? 'secondary-button secondary-button--active'
-                    : 'secondary-button'
-                }
-                onClick={() => setSelectionMode('start')}
-              >
-                Rinkti tašką A
-              </button>
-              <button
-                type="button"
-                className={
-                  selectionMode === 'end'
-                    ? 'secondary-button secondary-button--active'
-                    : 'secondary-button'
-                }
-                onClick={() => setSelectionMode('end')}
-              >
-                Rinkti tašką B
-              </button>
-            </div>
-            <div className="point-summary">
-              <div>
-                <span>Taškas A</span>
-                <strong>{formatPoint(startPoint)}</strong>
-              </div>
-              <div>
-                <span>Taškas B</span>
-                <strong>{formatPoint(endPoint)}</strong>
-              </div>
-            </div>
-            <label className="field">
-              <span>{`Maksimalus nuokrypis nuo maršruto: ${corridorKm.toFixed(1)} km`}</span>
-              <input
-                type="range"
-                min="0.5"
-                max="10"
-                step="0.5"
-                value={corridorKm}
-                onChange={(event) => setCorridorKm(Number(event.target.value))}
-              />
-            </label>
-            <div className="field-grid field-grid--compact">
-              <label className="field field--compact">
-                <span>Planuojamas pirkimas (litrai)</span>
-                <input
-                  type="number"
-                  min="1"
-                  step="1"
-                  value={plannedFuelLiters}
-                  onChange={(event) =>
-                    setPlannedFuelLiters(Math.max(Number(event.target.value) || 0, 1))
-                  }
-                />
-              </label>
-              <label className="field field--compact">
-                <span>Sąnaudos l/100 km</span>
-                <input
-                  type="number"
-                  min="0.1"
-                  step="0.1"
-                  value={fuelConsumptionPer100Km}
-                  onChange={(event) =>
-                    setFuelConsumptionPer100Km(Math.max(Number(event.target.value) || 0, 0.1))
-                  }
-                />
-              </label>
-            </div>
-            <p className="panel-note">
-              Pigiausias sustojimas skaičiuojamas pagal pasirinktą kuro rūšį, planuojamą litražą ir
-              numanomą papildomą kelią iki stotelės ir atgal į maršrutą.
-            </p>
-            <div className="route-actions">
-              <button
-                type="button"
-                className="primary-button"
-                onClick={handleFetchRoute}
-                disabled={isLoadingRoute || filteredStations.length === 0}
-              >
-                {isLoadingRoute ? 'Skaičiuojama...' : 'Rasti degalines palei maršrutą'}
-              </button>
-              <button type="button" className="secondary-button" onClick={handleClearRoute}>
-                Išvalyti
-              </button>
-            </div>
-            {route && (
-              <p className="route-stats">
-                {`Maršrutas: ${formatDistance(route.distanceMeters)} • ${formatDuration(route.durationSeconds)}`}
-              </p>
-            )}
-            {routeError && <p className="route-error">{routeError}</p>}
-            {route && comparisonMode === 'cheapest-route' && bestRouteCandidate && (
-              <div className="result-card">
-                <div className="result-card__header">
-                  <div>
-                    <span className="summary-label">Pigiausias sustojimas</span>
-                    <strong>{bestRouteCandidate.station.network}</strong>
-                  </div>
-                  <span className="route-pill route-pill--best">Geriausias pasirinkimas</span>
-                </div>
-                <p className="address-text">{bestRouteCandidate.station.address}</p>
-                <div className="metric-grid">
-                  <div className="metric-card">
-                    <span className="metric-label">Kaina už litrą</span>
-                    <strong>{formatFuelPrice(bestRouteCandidate.fuelPrice)}</strong>
-                  </div>
-                  <div className="metric-card">
-                    <span className="metric-label">Pirkimo kaina</span>
-                    <strong>{formatMoney(bestRouteCandidate.purchaseCost)}</strong>
-                  </div>
-                  <div className="metric-card">
-                    <span className="metric-label">Papildomas kelias</span>
-                    <strong>{formatKilometers(bestRouteCandidate.estimatedDetourKm)}</strong>
-                  </div>
-                  <div className="metric-card">
-                    <span className="metric-label">Papildomos sąnaudos</span>
-                    <strong>{formatLiters(bestRouteCandidate.detourFuelLiters)}</strong>
-                  </div>
-                  <div className="metric-card metric-card--wide">
-                    <span className="metric-label">Numatoma bendra sustojimo kaina</span>
-                    <strong>{formatMoney(bestRouteCandidate.totalEstimatedCost)}</strong>
-                  </div>
-                </div>
-              </div>
-            )}
-            {route && comparisonMode === 'cheapest-route' && !bestRouteCandidate && (
-              <p className="panel-note">
-                Šiuo metu palei pasirinktą maršrutą nėra stotelių su žinoma pasirinkto kuro kaina.
-              </p>
-            )}
-          </section>
-
-          <section className="panel">
             <h2>Aprėptis</h2>
             <ul className="coverage-list">
               <li>{`Koordinatės iš talpyklos: ${snapshot?.coverage.cacheMatches ?? 0}`}</li>
@@ -768,10 +1022,12 @@ function App() {
         </aside>
 
         <main className="main-column">
+          {routePanel}
+
           <RouteMap
             stations={sortedFilteredStations}
             route={route}
-            activeSelection={selectionMode}
+            activeSelection={activePointSelectionMode}
             routeStationIds={routeStationIds}
             topStationId={topStationId}
             featuredStationId={comparisonMode === 'cheapest-route' ? featuredStationId : null}

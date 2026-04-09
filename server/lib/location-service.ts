@@ -1,5 +1,6 @@
 import type { SnapshotCoverage, StationRecord } from '../../shared/types.js'
 import { readJsonCache, writeJsonCache } from './cache-store.js'
+import { geocodeAddress } from './geocoding-service.js'
 import {
   municipalityToCity,
   normalizeStreet,
@@ -54,7 +55,6 @@ const OSM_CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 7
 const MAX_GEOCODER_LOOKUPS = 40
 const GEOCODER_CONCURRENCY = 4
 const GEOCODER_DELAY_MS = 150
-const GEOCODER_TIMEOUT_MS = 4000
 
 function createCoverage(stations: StationRecord[]): SnapshotCoverage {
   const locatedStations = stations.filter((station) => station.coordinates !== null)
@@ -240,42 +240,10 @@ async function geocodeStation(station: StationRecord) {
     .filter((query, index, values) => query.length > 0 && values.indexOf(query) === index)
 
   for (const query of queries) {
-    try {
-      const url = new URL('https://photon.komoot.io/api/')
-      url.searchParams.set('limit', '1')
-      url.searchParams.set('q', query)
+    const geocodedPoint = await geocodeAddress(query)
 
-      const response = await fetch(url, {
-        headers: {
-          'User-Agent': 'DegaluKainos/1.0 (+https://ena.lt)',
-          Accept: 'application/json',
-        },
-        signal: AbortSignal.timeout(GEOCODER_TIMEOUT_MS),
-      })
-
-      if (!response.ok) {
-        continue
-      }
-
-      const payload = (await response.json()) as {
-        features?: Array<{
-          geometry?: {
-            coordinates?: [number, number]
-          }
-        }>
-      }
-      const coordinates = payload.features?.[0]?.geometry?.coordinates
-
-      if (!coordinates || coordinates.length < 2) {
-        continue
-      }
-
-      return {
-        lat: coordinates[1],
-        lng: coordinates[0],
-      }
-    } catch {
-      continue
+    if (geocodedPoint) {
+      return geocodedPoint
     }
   }
 

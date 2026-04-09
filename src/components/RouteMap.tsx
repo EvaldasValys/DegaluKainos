@@ -14,7 +14,7 @@ import type { RoutePoint, RouteResult, StationRecord } from '../../shared/types'
 interface RouteMapProps {
   stations: StationRecord[]
   route: RouteResult | null
-  activeSelection: 'start' | 'end'
+  activeSelection: 'start' | 'end' | 'none'
   routeStationIds: Set<string>
   topStationId: string | null
   featuredStationId: string | null
@@ -56,6 +56,10 @@ function LocationPicker({
 
   useMapEvents({
     click(event) {
+      if (activeSelection === 'none') {
+        return
+      }
+
       onMapPick({
         lat: event.latlng.lat,
         lng: event.latlng.lng,
@@ -64,7 +68,8 @@ function LocationPicker({
   })
 
   useEffect(() => {
-    map.getContainer().style.cursor = activeSelection === 'start' ? 'crosshair' : 'copy'
+    map.getContainer().style.cursor =
+      activeSelection === 'none' ? '' : activeSelection === 'start' ? 'crosshair' : 'copy'
 
     return () => {
       map.getContainer().style.cursor = ''

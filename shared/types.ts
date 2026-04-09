@@ -57,6 +57,11 @@ export interface RoutePoint {
   lng: number
 }
 
+export interface AddressSuggestion {
+  label: string
+  point: RoutePoint
+}
+
 export interface RouteResult {
   distanceMeters: number
   durationSeconds: number

@@ -231,6 +231,62 @@
   margin-bottom: 0.85rem;
 }
 
+.address-entry {
+  display: grid;
+  gap: 0.75rem;
+  margin-bottom: 0.85rem;
+}
+
+.autocomplete-field {
+  position: relative;
+}
+
+.field--with-suggestions {
+  margin-bottom: 0;
+}
+
+.autocomplete-menu {
+  position: absolute;
+  top: calc(100% - 0.2rem);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  display: grid;
+  max-height: 16rem;
+  overflow-y: auto;
+  background: #ffffff;
+  border: 1px solid #dbe4f0;
+  border-radius: 0.9rem;
+  box-shadow: 0 16px 32px rgba(15, 23, 42, 0.12);
+}
+
+.autocomplete-option {
+  font: inherit;
+  padding: 0.75rem 0.85rem;
+  border: 0;
+  background: transparent;
+  color: #0f172a;
+  text-align: left;
+  cursor: pointer;
+}
+
+.autocomplete-option + .autocomplete-option {
+  border-top: 1px solid #e2e8f0;
+}
+
+.autocomplete-option:hover,
+.autocomplete-option:focus-visible {
+  background: #fff7ed;
+  outline: none;
+}
+
+.autocomplete-status {
+  margin: 0;
+  padding: 0.8rem 0.85rem;
+  color: #64748b;
+  font-size: 0.92rem;
+}
+
 .toggle-button {
   font: inherit;
   padding: 0.85rem 0.9rem;

@@ -1,6 +1,7 @@
 import express from 'express'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
+import { geocodeAddress, suggestAddresses } from './lib/geocoding-service.js'
 import { fetchTodaySnapshot } from './lib/price-service.js'
 import { fetchRoute } from './lib/routing-service.js'
 
@@ -55,6 +56,48 @@ async function createServer() {
     } catch (error) {
       response.status(502).json({
         error: error instanceof Error ? error.message : 'Failed to calculate the route',
+      })
+    }
+  })
+
+  app.get('/api/geocode', async (request, response) => {
+    const query = String(request.query.q ?? '').trim()
+
+    if (!query) {
+      response.status(400).json({ error: 'Address query is required.' })
+      return
+    }
+
+    try {
+      const point = await geocodeAddress(query)
+
+      if (!point) {
+        response.status(404).json({ error: 'Address could not be geocoded.' })
+        return
+      }
+
+      response.json(point)
+    } catch (error) {
+      response.status(502).json({
+        error: error instanceof Error ? error.message : 'Failed to geocode the address',
+      })
+    }
+  })
+
+  app.get('/api/geocode/suggest', async (request, response) => {
+    const query = String(request.query.q ?? '').trim()
+
+    if (!query) {
+      response.status(400).json({ error: 'Address query is required.' })
+      return
+    }
+
+    try {
+      const suggestions = await suggestAddresses(query)
+      response.json(suggestions)
+    } catch (error) {
+      response.status(502).json({
+        error: error instanceof Error ? error.message : 'Failed to fetch address suggestions',
       })
     }
   })

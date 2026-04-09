@@ -1,4 +1,4 @@
-import type { PriceSnapshot, RoutePoint, RouteResult } from '../../shared/types'
+import type { AddressSuggestion, PriceSnapshot, RoutePoint, RouteResult } from '../../shared/types'
 
 async function readJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -20,4 +20,20 @@ export async function fetchRoute(start: RoutePoint, end: RoutePoint) {
   })
 
   return readJson<RouteResult>(await fetch(`/api/route?${params.toString()}`))
+}
+
+export async function fetchAddressPoint(address: string) {
+  const params = new URLSearchParams({
+    q: address,
+  })
+
+  return readJson<RoutePoint>(await fetch(`/api/geocode?${params.toString()}`))
+}
+
+export async function fetchAddressSuggestions(address: string) {
+  const params = new URLSearchParams({
+    q: address,
+  })
+
+  return readJson<AddressSuggestion[]>(await fetch(`/api/geocode/suggest?${params.toString()}`))
 }
