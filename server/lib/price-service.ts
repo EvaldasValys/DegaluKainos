@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx'
 import type { PriceSnapshot, StationRecord } from '../../shared/types.js'
 import { resolveStationLocations } from './location-service.js'
+import { writePublishedSnapshot } from './snapshot-store.js'
 import {
   buildStationId,
   formatLithuaniaDate,
@@ -136,4 +137,10 @@ export async function fetchTodaySnapshot(): Promise<PriceSnapshot> {
     coverage: resolved.coverage,
     locationNotes: resolved.locationNotes,
   }
+}
+
+export async function refreshLatestSnapshot() {
+  const snapshot = await fetchTodaySnapshot()
+  await writePublishedSnapshot(snapshot)
+  return snapshot
 }

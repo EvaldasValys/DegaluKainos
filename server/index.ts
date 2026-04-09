@@ -2,12 +2,14 @@ import express from 'express'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { geocodeAddress, suggestAddresses } from './lib/geocoding-service.js'
-import { fetchTodaySnapshot } from './lib/price-service.js'
+import { refreshLatestSnapshot } from './lib/price-service.js'
 import { fetchRoute } from './lib/routing-service.js'
+import { readLatestPublishedSnapshot } from './lib/snapshot-store.js'
 
 const projectRoot = process.cwd()
 const isProduction = process.env.NODE_ENV === 'production'
 const port = Number(process.env.PORT ?? 5173)
+const adminRefreshToken = process.env.ADMIN_REFRESH_TOKEN?.trim() ?? ''
 
 function parseRoutePoint(value: string | undefined) {
   if (!value) {
@@ -30,13 +32,49 @@ async function createServer() {
 
   app.disable('x-powered-by')
 
-  app.get('/api/prices/today', async (_request, response) => {
+  app.get('/api/prices/latest', async (_request, response) => {
     try {
-      const snapshot = await fetchTodaySnapshot()
+      const snapshot = await readLatestPublishedSnapshot()
+
+      if (!snapshot) {
+        response.status(404).json({
+          error: 'No published snapshot is available yet. Run an admin refresh first.',
+        })
+        return
+      }
+
       response.json(snapshot)
     } catch (error) {
       response.status(502).json({
-        error: error instanceof Error ? error.message : 'Failed to fetch today’s workbook',
+        error: error instanceof Error ? error.message : 'Failed to read the latest published snapshot',
+      })
+    }
+  })
+
+  app.post('/api/admin/refresh', async (request, response) => {
+    if (!adminRefreshToken) {
+      response.status(503).json({
+        error: 'Admin refresh endpoint is disabled because ADMIN_REFRESH_TOKEN is not configured.',
+      })
+      return
+    }
+
+    if (request.get('x-admin-refresh-token') !== adminRefreshToken) {
+      response.status(401).json({ error: 'Invalid admin refresh token.' })
+      return
+    }
+
+    try {
+      const snapshot = await refreshLatestSnapshot()
+      response.json({
+        snapshotDate: snapshot.snapshotDate,
+        refreshedAt: snapshot.fetchedAt,
+        stationCount: snapshot.stations.length,
+        sourceUrl: snapshot.sourceUrl,
+      })
+    } catch (error) {
+      response.status(502).json({
+        error: error instanceof Error ? error.message : 'Failed to refresh the published snapshot',
       })
     }
   })

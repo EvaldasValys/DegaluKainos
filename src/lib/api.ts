@@ -9,8 +9,8 @@ async function readJson<T>(response: Response): Promise<T> {
   return (await response.json()) as T
 }
 
-export async function fetchTodayPrices() {
-  return readJson<PriceSnapshot>(await fetch('/api/prices/today'))
+export async function fetchLatestPrices() {
+  return readJson<PriceSnapshot>(await fetch('/api/prices/latest'))
 }
 
 export async function fetchRoute(start: RoutePoint, end: RoutePoint) {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { lineString, point } from '@turf/helpers'
 import pointToLineDistance from '@turf/point-to-line-distance'
 import {
@@ -12,7 +12,7 @@ import {
   type StationRecord,
 } from '../shared/types'
 import { RouteMap } from './components/RouteMap'
-import { fetchAddressPoint, fetchAddressSuggestions, fetchRoute, fetchTodayPrices } from './lib/api'
+import { fetchAddressPoint, fetchAddressSuggestions, fetchLatestPrices, fetchRoute } from './lib/api'
 import './App.css'
 
 type SortKey = 'price-asc' | 'price-desc' | 'network' | 'detour-asc' | 'total-cost-asc'
@@ -75,6 +75,11 @@ const coordinateFormatter = new Intl.NumberFormat('lt-LT', {
   maximumFractionDigits: 4,
 })
 
+const dateTimeFormatter = new Intl.DateTimeFormat('lt-LT', {
+  dateStyle: 'medium',
+  timeStyle: 'short',
+})
+
 function formatFuelPrice(value: number | null) {
   return value === null ? 'N/A' : `${fuelPriceFormatter.format(value)} EUR`
 }
@@ -113,6 +118,16 @@ function formatKilometers(distanceKm: number) {
 
 function formatLiters(liters: number) {
   return `${quantityFormatter.format(liters)} l`
+}
+
+function formatDateTime(value: string) {
+  const parsedDate = new Date(value)
+
+  if (Number.isNaN(parsedDate.getTime())) {
+    return value
+  }
+
+  return dateTimeFormatter.format(parsedDate)
 }
 
 function normalizeNetworkName(value: string) {
@@ -570,21 +585,27 @@ function App() {
     }
   }, [blacklistedNetworkKeys, networkFilter])
 
-  async function handleFetchSnapshot() {
+  const handleFetchSnapshot = useCallback(async () => {
     setIsLoadingSnapshot(true)
     setSnapshotError(null)
 
     try {
-      const nextSnapshot = await fetchTodayPrices()
+      const nextSnapshot = await fetchLatestPrices()
       setSnapshot(nextSnapshot)
       setFocusedStationId(null)
       setMapFocusTarget(null)
     } catch (error) {
-      setSnapshotError(error instanceof Error ? error.message : 'Nepavyko gauti šiandienos kainų.')
+      setSnapshotError(
+        error instanceof Error ? error.message : 'Nepavyko gauti paskelbtų kainų duomenų.',
+      )
     } finally {
       setIsLoadingSnapshot(false)
     }
-  }
+  }, [])
+
+  useEffect(() => {
+    void handleFetchSnapshot()
+  }, [handleFetchSnapshot])
 
   async function handleFetchRoute() {
     setIsLoadingRoute(true)
@@ -954,9 +975,9 @@ function App() {
           <p className="eyebrow">Lietuvos degalų palyginimas</p>
           <h1>Dienos kainos + maršruto režimai tarp A ir B</h1>
           <p className="hero-copy">
-            Atnaujinkite šiandienos ENA Excel duomenis, filtruokite stoteles ir pasirinkite, ar
-            norite matyti visas degalines palei maršrutą, ar vieną pigiausią sustojimą pagal kainą
-            ir numatomą papildomą atstumą.
+            Naudokite paskelbtus ENA duomenis, filtruokite stoteles ir pasirinkite, ar norite
+            matyti visas degalines palei maršrutą, ar vieną pigiausią sustojimą pagal kainą ir
+            numatomą papildomą atstumą.
           </p>
         </div>
         <div className="hero-actions">
@@ -966,11 +987,12 @@ function App() {
             onClick={handleFetchSnapshot}
             disabled={isLoadingSnapshot}
           >
-            {isLoadingSnapshot ? 'Kraunama...' : 'Gauti šiandienos kainas'}
+            {isLoadingSnapshot ? 'Kraunama...' : 'Atnaujinti paskelbtus duomenis'}
           </button>
           {snapshot && (
             <div className="source-meta">
               <span>{`Data: ${snapshot.snapshotDate}`}</span>
+              <span>{`Paskelbta: ${formatDateTime(snapshot.fetchedAt)}`}</span>
               <a href={snapshot.sourceUrl} target="_blank" rel="noreferrer">
                 Excel šaltinis
               </a>
@@ -1001,7 +1023,8 @@ function App() {
       {snapshotError && <p className="status-banner status-banner--error">{snapshotError}</p>}
       {!snapshot && !snapshotError && (
         <p className="status-banner">
-          Paspauskite mygtuką, kad serveris parsiųstų šiandienos ENA Excel failą.
+          Dar nėra paskelbto duomenų rinkinio. Pirmiausia paleiskite administratoriaus refresh
+          komandą arba apsaugotą refresh endpointą.
         </p>
       )}
       {snapshot?.locationNotes.map((note) => (

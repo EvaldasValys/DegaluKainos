@@ -8,7 +8,9 @@
     "build": "rm -rf dist && vite build && tsc -p tsconfig.server.json",
     "lint": "eslint .",
     "preview": "vite preview",
-    "start": "NODE_ENV=production node dist/server/index.js"
+    "start": "NODE_ENV=production node dist/server/index.js",
+    "refresh:snapshot": "NODE_ENV=production node dist/server/scripts/refresh-snapshot.js",
+    "refresh:snapshot:dev": "tsx server/scripts/refresh-snapshot.ts"
   },
   "dependencies": {
     "@turf/helpers": "^7.3.4",
