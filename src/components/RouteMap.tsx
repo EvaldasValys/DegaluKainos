@@ -46,6 +46,8 @@ function LocationPicker({
   activeSelection,
   onMapPick,
 }: Pick<RouteMapProps, 'activeSelection' | 'onMapPick'>) {
+  const map = useMap()
+
   useMapEvents({
     click(event) {
       onMapPick({
@@ -56,12 +58,12 @@ function LocationPicker({
   })
 
   useEffect(() => {
-    document.body.style.cursor = activeSelection === 'start' ? 'crosshair' : 'copy'
+    map.getContainer().style.cursor = activeSelection === 'start' ? 'crosshair' : 'copy'
 
     return () => {
-      document.body.style.cursor = 'default'
+      map.getContainer().style.cursor = ''
     }
-  }, [activeSelection])
+  }, [activeSelection, map])
 
   return null
 }
