@@ -326,7 +326,7 @@ function compareStations(
 
 function calculateRouteCandidate(
   station: StationRecord,
-  routeLine: RouteResult['geometry'],
+  routeCorridor: ReturnType<typeof lineString>,
   fuelKey: FuelKey,
   purchaseLiters: number,
   fuelConsumptionPer100Km: number,
@@ -335,9 +335,8 @@ function calculateRouteCandidate(
     return null
   }
 
-  const corridor = lineString(routeLine)
   const stationPoint = point([station.coordinates.lng, station.coordinates.lat])
-  const distanceFromRouteKm = pointToLineDistance(stationPoint, corridor, {
+  const distanceFromRouteKm = pointToLineDistance(stationPoint, routeCorridor, {
     units: 'kilometers',
   })
   const estimatedDetourKm = distanceFromRouteKm * 2
@@ -435,24 +434,30 @@ function App() {
     })
   }, [areaQuery, blacklistedNetworkKeys, municipalityFilter, networkFilter, snapshot])
 
-  const routeCandidates = useMemo(() => {
+  const allRouteCandidates = useMemo(() => {
     if (!route) {
       return [] as RouteCandidate[]
     }
+
+    const routeCorridor = lineString(route.geometry)
 
     return filteredStations
       .map((station) =>
         calculateRouteCandidate(
           station,
-          route.geometry,
+          routeCorridor,
           fuelKey,
           Math.max(plannedFuelLiters, 0),
           Math.max(fuelConsumptionPer100Km, 0),
         ),
       )
       .filter((candidate): candidate is RouteCandidate => candidate !== null)
-      .filter((candidate) => candidate.distanceFromRouteKm <= corridorKm)
-  }, [corridorKm, filteredStations, fuelConsumptionPer100Km, fuelKey, plannedFuelLiters, route])
+  }, [filteredStations, fuelConsumptionPer100Km, fuelKey, plannedFuelLiters, route])
+
+  const routeCandidates = useMemo(
+    () => allRouteCandidates.filter((candidate) => candidate.distanceFromRouteKm <= corridorKm),
+    [allRouteCandidates, corridorKm],
+  )
 
   const routeStationIds = useMemo(
     () => new Set(routeCandidates.map((candidate) => candidate.station.id)),
