@@ -8,7 +8,7 @@ Web app for comparing Lithuania's daily fuel prices from ENA and finding station
 - Parses station prices for 95 benzinas, dyzelinas, and SND
 - Matches stations to OpenStreetMap fuel locations and caches coordinates
 - Falls back to limited address geocoding for stations that were not matched yet
-- Lets the user define route points **A** and **B** either on the map or by entering addresses with autocomplete, then highlights stations near the route
+- Lets the user define route points **A** and **B** either on the map or by entering Lithuanian addresses with autocomplete, then highlights stations near the route
 - Supports a gas station blacklist so selected networks are excluded from the map and route/list results
 - Supports two route modes: all stations along the route or the cheapest stop based on fuel price, planned liters, and estimated detour cost
 

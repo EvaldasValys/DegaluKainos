@@ -2,6 +2,13 @@ import type { AddressSuggestion, RoutePoint } from '../../shared/types.js'
 
 const GEOCODER_TIMEOUT_MS = 4000
 const DEFAULT_SUGGESTION_LIMIT = 5
+const LITHUANIA_COUNTRY_CODE = 'LT'
+const LITHUANIA_BBOX = {
+  minLng: 20.93,
+  minLat: 53.89,
+  maxLng: 26.84,
+  maxLat: 56.45,
+}
 
 interface PhotonFeature {
   geometry?: {
@@ -84,6 +91,16 @@ async function fetchPhotonSuggestions(query: string, limit: number) {
   const url = new URL('https://photon.komoot.io/api/')
   url.searchParams.set('limit', String(limit))
   url.searchParams.set('q', query)
+  url.searchParams.set(
+    'bbox',
+    [
+      LITHUANIA_BBOX.minLng,
+      LITHUANIA_BBOX.minLat,
+      LITHUANIA_BBOX.maxLng,
+      LITHUANIA_BBOX.maxLat,
+    ].join(','),
+  )
+  url.searchParams.set('countrycode', LITHUANIA_COUNTRY_CODE)
 
   const response = await fetch(url, {
     headers: {
