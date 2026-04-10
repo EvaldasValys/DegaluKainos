@@ -477,7 +477,7 @@ function App() {
   }, [filteredStations, fuelConsumptionPer100Km, fuelKey, plannedFuelLiters, route])
 
   const routeCandidates = useMemo(
-    () => allRouteCandidates.filter((candidate) => candidate.distanceFromRouteKm <= corridorKm),
+    () => allRouteCandidates.filter((candidate) => candidate.estimatedDetourKm <= corridorKm),
     [allRouteCandidates, corridorKm],
   )
 
@@ -591,6 +591,19 @@ function App() {
       ).length,
     [blacklistedNetworkKeys, snapshot],
   )
+
+  useEffect(() => {
+    if (!focusedStationId) {
+      return
+    }
+
+    const stillDisplayed = displayedStations.some((station) => station.id === focusedStationId)
+
+    if (!stillDisplayed) {
+      setFocusedStationId(null)
+      setMapFocusTarget(null)
+    }
+  }, [displayedStations, focusedStationId])
 
   useEffect(() => {
     if (networkFilter !== 'all' && blacklistedNetworkKeys.has(normalizeNetworkName(networkFilter))) {
@@ -887,7 +900,7 @@ function App() {
         </div>
       </div>
       <label className="field">
-        <span>{`Maksimalus nuokrypis nuo maršruto: ${corridorKm.toFixed(1)} km`}</span>
+        <span>{`Maksimalus papildomas kelias: ${corridorKm.toFixed(1)} km`}</span>
         <input
           type="range"
           min="0.5"
@@ -1207,7 +1220,7 @@ function App() {
                       <th>95</th>
                       <th>Dyzelinas</th>
                       <th>SND</th>
-                      <th>Nuokrypis</th>
+                        <th>Papildomas kelias</th>
                       <th>Numatoma kaina</th>
                       <th>Maršrutas</th>
                     </tr>
@@ -1253,7 +1266,7 @@ function App() {
                           <td data-label="Dyzelinas">{formatFuelPrice(station.prices.diesel)}</td>
                           <td data-label="SND">{formatFuelPrice(station.prices.lpg)}</td>
                           <td
-                            data-label="Nuokrypis"
+                            data-label="Papildomas kelias"
                             className={routeCandidate ? 'table-number' : 'table-number table-number--muted'}
                           >
                             {routeCandidate
