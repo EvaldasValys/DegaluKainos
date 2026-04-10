@@ -22,30 +22,37 @@ const HEADERS = {
   lpg: 'SND',
 } as const
 
-function buildWorkbookUrl(snapshotDate: string) {
+function buildWorkbookUrl(snapshotDate: string, pathPrefix: 'dk' | 'DK') {
   const year = snapshotDate.slice(0, 4)
-  return `https://www.ena.lt/uploads/${year}-EDAC/dk-degalinese-${year}/dk-${snapshotDate}.xlsx`
+  return `https://www.ena.lt/uploads/${year}-EDAC/dk-degalinese-${year}/${pathPrefix}-${snapshotDate}.xlsx`
 }
 
 async function downloadWorkbook(snapshotDate: string) {
-  const sourceUrl = buildWorkbookUrl(snapshotDate)
-  const response = await fetch(sourceUrl, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (compatible; DegaluKainos/1.0)',
-      Accept:
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/octet-stream',
-    },
-  })
+  const requestHeaders = {
+    'User-Agent': 'Mozilla/5.0 (compatible; DegaluKainos/1.0)',
+    Accept: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/octet-stream',
+  }
+  const sourceUrls = [buildWorkbookUrl(snapshotDate, 'dk'), buildWorkbookUrl(snapshotDate, 'DK')]
+  const failures: string[] = []
 
-  if (!response.ok) {
-    throw new Error(`Workbook download failed with ${response.status}`)
+  for (const sourceUrl of sourceUrls) {
+    const response = await fetch(sourceUrl, {
+      headers: requestHeaders,
+    })
+
+    if (!response.ok) {
+      failures.push(`${sourceUrl} -> ${response.status}`)
+      continue
+    }
+
+    const arrayBuffer = await response.arrayBuffer()
+    return {
+      sourceUrl,
+      workbook: XLSX.read(Buffer.from(arrayBuffer), { type: 'buffer' }),
+    }
   }
 
-  const arrayBuffer = await response.arrayBuffer()
-  return {
-    sourceUrl,
-    workbook: XLSX.read(Buffer.from(arrayBuffer), { type: 'buffer' }),
-  }
+  throw new Error(`Workbook download failed for all known URL variants: ${failures.join('; ')}`)
 }
 
 function parseRow(row: Record<string, unknown>): StationRecord | null {

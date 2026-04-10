@@ -107,6 +107,9 @@ This command:
 - exits successfully if today's LEA workbook is still not available
 - only fails for real errors that need attention
 
+The workbook downloader automatically tries both `dk-YYYY-MM-DD.xlsx` and `DK-YYYY-MM-DD.xlsx`
+because LEA path casing can vary between days.
+
 ## Optional protected refresh endpoint
 
 You can also trigger publishing remotely through:
