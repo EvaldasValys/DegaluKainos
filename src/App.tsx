@@ -12,7 +12,12 @@ import {
   type StationRecord,
 } from '../shared/types'
 import { RouteMap } from './components/RouteMap'
-import { fetchAddressPoint, fetchAddressSuggestions, fetchLatestPrices, fetchRoute } from './lib/api'
+import {
+  fetchAddressPoint,
+  fetchAddressSuggestions,
+  fetchLatestPricesWithOptions,
+  fetchRoute,
+} from './lib/api'
 import './App.css'
 
 type SortKey = 'price-asc' | 'price-desc' | 'network' | 'detour-asc' | 'total-cost-asc'
@@ -585,12 +590,12 @@ function App() {
     }
   }, [blacklistedNetworkKeys, networkFilter])
 
-  const handleFetchSnapshot = useCallback(async () => {
+  const handleFetchSnapshot = useCallback(async (forceRefresh = false) => {
     setIsLoadingSnapshot(true)
     setSnapshotError(null)
 
     try {
-      const nextSnapshot = await fetchLatestPrices()
+      const nextSnapshot = await fetchLatestPricesWithOptions({ forceRefresh })
       setSnapshot(nextSnapshot)
       setFocusedStationId(null)
       setMapFocusTarget(null)
@@ -984,7 +989,7 @@ function App() {
           <button
             type="button"
             className="primary-button"
-            onClick={handleFetchSnapshot}
+            onClick={() => void handleFetchSnapshot(true)}
             disabled={isLoadingSnapshot}
           >
             {isLoadingSnapshot ? 'Kraunama...' : 'Atnaujinti paskelbtus duomenis'}

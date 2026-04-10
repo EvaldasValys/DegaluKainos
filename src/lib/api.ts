@@ -100,6 +100,7 @@ interface CachedJsonRequestOptions<T> {
   getTtlMs?: (value: T) => number
   notFoundMessage?: string
   revalidateWithValidators?: boolean
+  skipFreshCache?: boolean
 }
 
 async function fetchCachedJson<T>({
@@ -109,10 +110,11 @@ async function fetchCachedJson<T>({
   getTtlMs,
   notFoundMessage,
   revalidateWithValidators = false,
+  skipFreshCache = false,
 }: CachedJsonRequestOptions<T>) {
   const cachedEntry = readLocalCacheEntry<T | null>(cacheKey)
 
-  if (cachedEntry && cachedEntry.expiresAt > Date.now()) {
+  if (!skipFreshCache && cachedEntry && cachedEntry.expiresAt > Date.now()) {
     if (cachedEntry.value === null) {
       throw new Error(notFoundMessage ?? 'Requested resource was not found.')
     }
@@ -165,11 +167,16 @@ async function fetchCachedJson<T>({
 }
 
 export async function fetchLatestPrices() {
+  return fetchLatestPricesWithOptions()
+}
+
+export async function fetchLatestPricesWithOptions(options?: { forceRefresh?: boolean }) {
   return fetchCachedJson<PriceSnapshot>({
     cacheKey: 'latest-snapshot',
     ttlMs: LATEST_SNAPSHOT_CLIENT_CACHE_TTL_MS,
     url: '/api/prices/latest',
     revalidateWithValidators: true,
+    skipFreshCache: options?.forceRefresh ?? false,
   })
 }
 
