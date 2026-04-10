@@ -9,7 +9,7 @@ Web app for comparing Lithuania's fuel prices from LEA using a **published backe
 - Matches stations to OpenStreetMap fuel locations and caches coordinates
 - Falls back to limited station address geocoding when coordinates are missing
 - Lets users define route points **A** and **B** on the map or by entering **Lithuanian addresses with autocomplete**
-- Shows all stations along the route and highlights the best stop based on price, planned liters, and estimated detour cost
+- Shows all stations along the route, highlights the best stop based on price, planned liters, and exact road-route detour cost, and can draw the route through the highlighted stop
 - Supports filtering, sorting, and a gas station blacklist
 - Excludes blacklisted networks from the list, map, and route results (**Jozita** is blacklisted by default)
 
@@ -20,6 +20,7 @@ Public users only read from the already-published dataset:
 
 - `GET /api/prices/latest`
 - `GET /api/route`
+- `POST /api/route/detours`
 - `GET /api/geocode`
 - `GET /api/geocode/suggest`
 
@@ -165,6 +166,10 @@ To reduce Render invocations, bandwidth, and third-party traffic, the app now ca
   - persistent disk cache in `data/cache/route-cache.json`
   - browser and HTTP cache for 7 days
   - cache keys round route points to 4 decimal places so nearby repeated requests reuse the same route
+- `POST /api/route/detours`
+  - persistent disk cache in `data/cache/route-detour-cache.json`
+  - exact A -> station -> B road-distance and duration metrics are cached for 7 days
+  - cache keys round start, via-station, and end points to 4 decimal places
 - `GET /api/geocode`
   - persistent disk cache in `data/cache/address-geocode-cache.json`
   - browser and HTTP cache for 90 days

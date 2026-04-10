@@ -35,6 +35,17 @@ export function createRouteCacheKey(start: RoutePoint, end: RoutePoint) {
   ].join(',')
 }
 
+export function createViaRouteCacheKey(start: RoutePoint, via: RoutePoint, end: RoutePoint) {
+  return [
+    roundCoordinate(start.lat),
+    roundCoordinate(start.lng),
+    roundCoordinate(via.lat),
+    roundCoordinate(via.lng),
+    roundCoordinate(end.lat),
+    roundCoordinate(end.lng),
+  ].join(',')
+}
+
 export function getSuggestionCacheTtlMs(resultCount: number) {
   return resultCount > 0 ? SUGGESTION_CACHE_TTL_MS : NEGATIVE_LOOKUP_CACHE_TTL_MS
 }

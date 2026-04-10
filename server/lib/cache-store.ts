@@ -92,6 +92,34 @@ export async function readTimedJsonCacheValue<T>(fileName: string, key: string) 
   return entry.value
 }
 
+export async function readTimedJsonCacheValues<T>(fileName: string, keys: string[]) {
+  const payload = await loadExpiringCache<T>(fileName)
+  const values = new Map<string, T>()
+  let didMutatePayload = false
+
+  for (const key of keys) {
+    const entry = payload[key]
+
+    if (!entry) {
+      continue
+    }
+
+    if (isExpired(entry.expiresAt)) {
+      delete payload[key]
+      didMutatePayload = true
+      continue
+    }
+
+    values.set(key, entry.value)
+  }
+
+  if (didMutatePayload) {
+    await persistExpiringCache(fileName, payload)
+  }
+
+  return values
+}
+
 export async function writeTimedJsonCacheValue<T>(
   fileName: string,
   key: string,
@@ -104,6 +132,30 @@ export async function writeTimedJsonCacheValue<T>(
     value,
     updatedAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + ttlMs).toISOString(),
+  }
+
+  await persistExpiringCache(fileName, payload)
+}
+
+export async function writeTimedJsonCacheValues<T>(
+  fileName: string,
+  entries: Array<{ key: string; value: T }>,
+  ttlMs: number,
+) {
+  if (entries.length === 0) {
+    return
+  }
+
+  const payload = await loadExpiringCache<T>(fileName)
+  const updatedAt = new Date().toISOString()
+  const expiresAt = new Date(Date.now() + ttlMs).toISOString()
+
+  for (const entry of entries) {
+    payload[entry.key] = {
+      value: entry.value,
+      updatedAt,
+      expiresAt,
+    }
   }
 
   await persistExpiringCache(fileName, payload)

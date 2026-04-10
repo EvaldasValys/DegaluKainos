@@ -67,3 +67,16 @@ export interface RouteResult {
   durationSeconds: number
   geometry: Array<[number, number]>
 }
+
+export interface RouteDetourStation {
+  id: string
+  point: RoutePoint
+}
+
+export interface RouteDetourResult {
+  stationId: string
+  detourDistanceMeters: number
+  detourDurationSeconds: number
+  totalRouteDistanceMeters: number
+  totalRouteDurationSeconds: number
+}

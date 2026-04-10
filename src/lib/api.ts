@@ -1,4 +1,11 @@
-import type { AddressSuggestion, PriceSnapshot, RoutePoint, RouteResult } from '../../shared/types'
+import type {
+  AddressSuggestion,
+  PriceSnapshot,
+  RouteDetourResult,
+  RouteDetourStation,
+  RoutePoint,
+  RouteResult,
+} from '../../shared/types'
 import {
   GEOCODE_CACHE_TTL_MS,
   LATEST_SNAPSHOT_CLIENT_CACHE_TTL_MS,
@@ -7,6 +14,7 @@ import {
   SUGGESTION_CACHE_TTL_MS,
   createAddressCacheKey,
   createRouteCacheKey,
+  createViaRouteCacheKey,
   createSuggestionCacheKey,
 } from '../../shared/cache'
 
@@ -180,17 +188,43 @@ export async function fetchLatestPricesWithOptions(options?: { forceRefresh?: bo
   })
 }
 
-export async function fetchRoute(start: RoutePoint, end: RoutePoint) {
+export async function fetchRoute(start: RoutePoint, end: RoutePoint, via?: RoutePoint) {
   const params = new URLSearchParams({
     from: `${start.lat},${start.lng}`,
     to: `${end.lat},${end.lng}`,
   })
 
+  if (via) {
+    params.set('via', `${via.lat},${via.lng}`)
+  }
+
   return fetchCachedJson<RouteResult>({
-    cacheKey: `route:${createRouteCacheKey(start, end)}`,
+    cacheKey: `route:${
+      via ? createViaRouteCacheKey(start, via, end) : createRouteCacheKey(start, end)
+    }`,
     ttlMs: ROUTE_CACHE_TTL_MS,
     url: `/api/route?${params.toString()}`,
   })
+}
+
+export async function fetchRouteDetours(
+  start: RoutePoint,
+  end: RoutePoint,
+  stations: RouteDetourStation[],
+) {
+  return readJson<RouteDetourResult[]>(
+    await fetch('/api/route/detours', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: start,
+        to: end,
+        stations,
+      }),
+    }),
+  )
 }
 
 export async function fetchAddressPoint(address: string) {

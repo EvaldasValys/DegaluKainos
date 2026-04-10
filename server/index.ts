@@ -1,7 +1,7 @@
 import express from 'express'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
-import type { PriceSnapshot } from '../shared/types.js'
+import type { PriceSnapshot, RouteDetourStation, RoutePoint } from '../shared/types.js'
 import {
   GEOCODE_CACHE_TTL_MS,
   NEGATIVE_LOOKUP_CACHE_TTL_MS,
@@ -11,7 +11,7 @@ import {
 } from '../shared/cache.js'
 import { geocodeAddress, suggestAddresses } from './lib/geocoding-service.js'
 import { refreshLatestSnapshot } from './lib/price-service.js'
-import { fetchRoute } from './lib/routing-service.js'
+import { fetchRoute, fetchRouteDetours } from './lib/routing-service.js'
 import { readLatestPublishedSnapshot } from './lib/snapshot-store.js'
 import { isIsoDateString } from './lib/utils.js'
 
@@ -65,6 +65,43 @@ function parseRoutePoint(value: string | undefined) {
   return { lat, lng }
 }
 
+function isRoutePoint(value: unknown): value is RoutePoint {
+  if (typeof value !== 'object' || value === null) {
+    return false
+  }
+
+  const candidate = value as Partial<RoutePoint>
+
+  return Number.isFinite(candidate.lat) && Number.isFinite(candidate.lng)
+}
+
+function parseRouteDetourStations(value: unknown) {
+  if (!Array.isArray(value)) {
+    return null
+  }
+
+  const stations: RouteDetourStation[] = []
+
+  for (const entry of value) {
+    if (typeof entry !== 'object' || entry === null) {
+      return null
+    }
+
+    const candidate = entry as Partial<RouteDetourStation>
+
+    if (typeof candidate.id !== 'string' || !isRoutePoint(candidate.point)) {
+      return null
+    }
+
+    stations.push({
+      id: candidate.id,
+      point: candidate.point,
+    })
+  }
+
+  return stations
+}
+
 function parseSnapshotDate(value: string | undefined) {
   if (!value) {
     return null
@@ -77,6 +114,7 @@ async function createServer() {
   const app = express()
 
   app.disable('x-powered-by')
+  app.use(express.json({ limit: '1mb' }))
 
   app.get('/api/prices/latest', async (request, response) => {
     try {
@@ -147,6 +185,7 @@ async function createServer() {
   app.get('/api/route', async (request, response) => {
     const start = parseRoutePoint(request.query.from as string | undefined)
     const end = parseRoutePoint(request.query.to as string | undefined)
+    const via = parseRoutePoint(request.query.via as string | undefined)
 
     if (!start || !end) {
       response.status(400).json({ error: 'Both route points must be provided as lat,lng pairs.' })
@@ -154,12 +193,34 @@ async function createServer() {
     }
 
     try {
-      const route = await fetchRoute(start, end)
+      const route = await fetchRoute(start, end, via ?? undefined)
       setPublicCache(response, Math.floor(ROUTE_CACHE_TTL_MS / 1000), true)
       response.json(route)
     } catch (error) {
       response.status(502).json({
         error: error instanceof Error ? error.message : 'Failed to calculate the route',
+      })
+    }
+  })
+
+  app.post('/api/route/detours', async (request, response) => {
+    const start = isRoutePoint(request.body?.from) ? request.body.from : null
+    const end = isRoutePoint(request.body?.to) ? request.body.to : null
+    const stations = parseRouteDetourStations(request.body?.stations)
+
+    if (!start || !end || !stations) {
+      response.status(400).json({
+        error: 'Route detour analysis requires valid from/to points and a stations array.',
+      })
+      return
+    }
+
+    try {
+      const detours = await fetchRouteDetours(start, end, stations)
+      response.json(detours)
+    } catch (error) {
+      response.status(502).json({
+        error: error instanceof Error ? error.message : 'Failed to calculate exact route detours',
       })
     }
   })

@@ -7,6 +7,8 @@ import {
   FUEL_LABELS,
   type FuelKey,
   type PriceSnapshot,
+  type RouteDetourResult,
+  type RouteDetourStation,
   type RoutePoint,
   type RouteResult,
   type StationRecord,
@@ -16,6 +18,7 @@ import {
   fetchAddressPoint,
   fetchAddressSuggestions,
   fetchLatestPricesWithOptions,
+  fetchRouteDetours,
   fetchRoute,
 } from './lib/api'
 import './App.css'
@@ -29,14 +32,16 @@ const AUTOCOMPLETE_MIN_QUERY_LENGTH = 3
 const AUTOCOMPLETE_DEBOUNCE_MS = 250
 const SNAPSHOT_REFRESH_DEBOUNCE_MS = 5000
 const DEFAULT_CORRIDOR_KM = 2.5
+const MAX_CORRIDOR_KM = 10
+const ROUTE_DETOUR_CHUNK_SIZE = 50
 const DEFAULT_BLACKLIST = ['Jozita']
 const DEFAULT_PLANNED_FUEL_LITERS = 40
 const DEFAULT_FUEL_CONSUMPTION_PER_100_KM = 7
 
 interface RouteCandidate {
   station: StationRecord
-  distanceFromRouteKm: number
-  estimatedDetourKm: number
+  detourDistanceKm: number
+  detourDurationSeconds: number
   fuelPrice: number | null
   purchaseLiters: number
   purchaseCost: number | null
@@ -310,8 +315,8 @@ function compareStations(
   if (sortBy === 'detour-asc') {
     return (
       compareNullableNumbers(
-        routeCandidateMap.get(left.id)?.estimatedDetourKm ?? null,
-        routeCandidateMap.get(right.id)?.estimatedDetourKm ?? null,
+        routeCandidateMap.get(left.id)?.detourDistanceKm ?? null,
+        routeCandidateMap.get(right.id)?.detourDistanceKm ?? null,
       ) || compareStationNames(left, right)
     )
   }
@@ -323,8 +328,8 @@ function compareStations(
         routeCandidateMap.get(right.id)?.totalEstimatedCost ?? null,
       ) ||
       compareNullableNumbers(
-        routeCandidateMap.get(left.id)?.estimatedDetourKm ?? null,
-        routeCandidateMap.get(right.id)?.estimatedDetourKm ?? null,
+        routeCandidateMap.get(left.id)?.detourDistanceKm ?? null,
+        routeCandidateMap.get(right.id)?.detourDistanceKm ?? null,
       ) ||
       compareStationNames(left, right)
     )
@@ -345,22 +350,18 @@ function compareStations(
 
 function calculateRouteCandidate(
   station: StationRecord,
-  routeCorridor: ReturnType<typeof lineString>,
+  detourMetrics: RouteDetourResult | undefined,
   fuelKey: FuelKey,
   purchaseLiters: number,
   fuelConsumptionPer100Km: number,
 ) {
-  if (!station.coordinates) {
+  if (!station.coordinates || !detourMetrics) {
     return null
   }
 
-  const stationPoint = point([station.coordinates.lng, station.coordinates.lat])
-  const distanceFromRouteKm = pointToLineDistance(stationPoint, routeCorridor, {
-    units: 'kilometers',
-  })
-  const estimatedDetourKm = distanceFromRouteKm * 2
+  const detourDistanceKm = detourMetrics.detourDistanceMeters / 1000
   const fuelPrice = station.prices[fuelKey]
-  const detourFuelLiters = (estimatedDetourKm * fuelConsumptionPer100Km) / 100
+  const detourFuelLiters = (detourDistanceKm * fuelConsumptionPer100Km) / 100
   const purchaseCost = fuelPrice === null ? null : purchaseLiters * fuelPrice
   const detourFuelCost = fuelPrice === null ? null : detourFuelLiters * fuelPrice
   const totalEstimatedCost =
@@ -368,8 +369,8 @@ function calculateRouteCandidate(
 
   return {
     station,
-    distanceFromRouteKm,
-    estimatedDetourKm,
+    detourDistanceKm,
+    detourDurationSeconds: detourMetrics.detourDurationSeconds,
     fuelPrice,
     purchaseLiters,
     purchaseCost,
@@ -377,6 +378,102 @@ function calculateRouteCandidate(
     detourFuelCost,
     totalEstimatedCost,
   } satisfies RouteCandidate
+}
+
+function calculateApproximateDetourLowerBoundKm(
+  station: StationRecord,
+  routeLine: ReturnType<typeof lineString>,
+) {
+  if (!station.coordinates) {
+    return null
+  }
+
+  return (
+    pointToLineDistance(point([station.coordinates.lng, station.coordinates.lat]), routeLine, {
+      units: 'kilometers',
+    }) * 2
+  )
+}
+
+function yieldToBrowser() {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, 0)
+  })
+}
+
+async function createRouteDetourStationsAsync(
+  stations: StationRecord[],
+  route: RouteResult,
+  maxDetourKm: number,
+  isCancelled: () => boolean,
+) {
+  const routeLine = lineString(route.geometry)
+  const routeDetourStations: RouteDetourStation[] = []
+
+  for (let startIndex = 0; startIndex < stations.length; startIndex += ROUTE_DETOUR_CHUNK_SIZE) {
+    if (isCancelled()) {
+      return null
+    }
+
+    const batch = stations.slice(startIndex, startIndex + ROUTE_DETOUR_CHUNK_SIZE)
+
+    for (const station of batch) {
+      const lowerBoundDetourKm = calculateApproximateDetourLowerBoundKm(station, routeLine)
+
+      if (lowerBoundDetourKm === null || lowerBoundDetourKm > maxDetourKm) {
+        continue
+      }
+
+      routeDetourStations.push({
+        id: station.id,
+        point: {
+          lat: station.coordinates.lat,
+          lng: station.coordinates.lng,
+        },
+      })
+    }
+
+    await yieldToBrowser()
+  }
+
+  return routeDetourStations
+}
+
+function formatRouteCalculationKeyPoint(pointValue: RoutePoint | null) {
+  return pointValue ? `${pointValue.lat.toFixed(5)},${pointValue.lng.toFixed(5)}` : 'unset'
+}
+
+function createRouteCalculationKey({
+  startPoint,
+  endPoint,
+  snapshotDate,
+  networkFilter,
+  municipalityFilter,
+  areaQuery,
+  blacklistedNetworks,
+}: {
+  startPoint: RoutePoint | null
+  endPoint: RoutePoint | null
+  snapshotDate: string | undefined
+  networkFilter: string
+  municipalityFilter: string
+  areaQuery: string
+  blacklistedNetworks: string[]
+}) {
+  const normalizedBlacklist = [...blacklistedNetworks]
+    .map((network) => normalizeNetworkName(network))
+    .sort((left, right) => left.localeCompare(right, 'lt'))
+    .join('|')
+
+  return [
+    snapshotDate ?? 'no-snapshot',
+    formatRouteCalculationKeyPoint(startPoint),
+    formatRouteCalculationKeyPoint(endPoint),
+    networkFilter,
+    municipalityFilter,
+    areaQuery.trim().toLowerCase(),
+    normalizedBlacklist,
+  ].join('::')
 }
 
 function App() {
@@ -399,8 +496,15 @@ function App() {
   const [blacklistInput, setBlacklistInput] = useState('')
   const [activeAddressField, setActiveAddressField] = useState<AddressFieldKey | null>(null)
   const [route, setRoute] = useState<RouteResult | null>(null)
+  const [displayRoute, setDisplayRoute] = useState<RouteResult | null>(null)
   const [routeError, setRouteError] = useState<string | null>(null)
   const [isLoadingRoute, setIsLoadingRoute] = useState(false)
+  const [routeDetourError, setRouteDetourError] = useState<string | null>(null)
+  const [isLoadingRouteDetours, setIsLoadingRouteDetours] = useState(false)
+  const [routeDetours, setRouteDetours] = useState<RouteDetourResult[]>([])
+  const [lastRouteCalculationKey, setLastRouteCalculationKey] = useState<string | null>(null)
+  const [routeDisplayError, setRouteDisplayError] = useState<string | null>(null)
+  const [isLoadingDisplayRoute, setIsLoadingDisplayRoute] = useState(false)
   const [isSnapshotRefreshCoolingDown, setIsSnapshotRefreshCoolingDown] = useState(false)
   const [focusedStationId, setFocusedStationId] = useState<string | null>(null)
   const [mapFocusTarget, setMapFocusTarget] = useState<MapFocusTarget | null>(null)
@@ -410,6 +514,7 @@ function App() {
     DEFAULT_FUEL_CONSUMPTION_PER_100_KM,
   )
   const snapshotRefreshCooldownTimerRef = useRef<number | null>(null)
+  const routeCalculationRequestIdRef = useRef(0)
 
   const networks = useMemo(() => {
     const values = new Set((snapshot?.stations ?? []).map((station) => station.network))
@@ -456,28 +561,29 @@ function App() {
     })
   }, [areaQuery, blacklistedNetworkKeys, municipalityFilter, networkFilter, snapshot])
 
-  const allRouteCandidates = useMemo(() => {
-    if (!route) {
-      return [] as RouteCandidate[]
-    }
+  const routeDetourMap = useMemo(
+    () => new Map(routeDetours.map((detour) => [detour.stationId, detour])),
+    [routeDetours],
+  )
 
-    const routeCorridor = lineString(route.geometry)
-
-    return filteredStations
-      .map((station) =>
-        calculateRouteCandidate(
-          station,
-          routeCorridor,
-          fuelKey,
-          Math.max(plannedFuelLiters, 0),
-          Math.max(fuelConsumptionPer100Km, 0),
-        ),
-      )
-      .filter((candidate): candidate is RouteCandidate => candidate !== null)
-  }, [filteredStations, fuelConsumptionPer100Km, fuelKey, plannedFuelLiters, route])
+  const allRouteCandidates = useMemo(
+    () =>
+      filteredStations
+        .map((station) =>
+          calculateRouteCandidate(
+            station,
+            routeDetourMap.get(station.id),
+            fuelKey,
+            Math.max(plannedFuelLiters, 0),
+            Math.max(fuelConsumptionPer100Km, 0),
+          ),
+        )
+        .filter((candidate): candidate is RouteCandidate => candidate !== null),
+    [filteredStations, fuelConsumptionPer100Km, fuelKey, plannedFuelLiters, routeDetourMap],
+  )
 
   const routeCandidates = useMemo(
-    () => allRouteCandidates.filter((candidate) => candidate.estimatedDetourKm <= corridorKm),
+    () => allRouteCandidates.filter((candidate) => candidate.detourDistanceKm <= corridorKm),
     [allRouteCandidates, corridorKm],
   )
 
@@ -525,17 +631,22 @@ function App() {
         return candidate
       }
 
-      if (
-        candidate.totalEstimatedCost === bestCandidate.totalEstimatedCost &&
-        candidate.estimatedDetourKm < bestCandidate.estimatedDetourKm
-      ) {
-        return candidate
-      }
+        if (
+          candidate.totalEstimatedCost === bestCandidate.totalEstimatedCost &&
+          candidate.detourDistanceKm < bestCandidate.detourDistanceKm
+        ) {
+          return candidate
+        }
 
       return bestCandidate
     }, null as RouteCandidate | null)
   }, [routeVisibleCandidates])
   const featuredStationId = bestRouteCandidate?.station.id ?? null
+  const routeDisplayStationId =
+    focusedStationId && routeCandidateMap.has(focusedStationId) ? focusedStationId : featuredStationId
+  const routeDisplayCandidate = routeDisplayStationId
+    ? routeCandidateMap.get(routeDisplayStationId) ?? null
+    : null
 
   const sortedFilteredStations = useMemo(
     () =>
@@ -591,6 +702,80 @@ function App() {
       ).length,
     [blacklistedNetworkKeys, snapshot],
   )
+  const currentRouteCalculationKey = useMemo(
+    () =>
+      createRouteCalculationKey({
+        startPoint,
+        endPoint,
+        snapshotDate: snapshot?.snapshotDate,
+        networkFilter,
+        municipalityFilter,
+        areaQuery,
+        blacklistedNetworks,
+      }),
+    [
+      areaQuery,
+      blacklistedNetworks,
+      endPoint,
+      municipalityFilter,
+      networkFilter,
+      snapshot?.snapshotDate,
+      startPoint,
+    ],
+  )
+  const isRouteCalculationStale =
+    route !== null && lastRouteCalculationKey !== null && currentRouteCalculationKey !== lastRouteCalculationKey
+
+  useEffect(() => {
+    if (!route || !startPoint || !endPoint) {
+      setDisplayRoute(null)
+      setRouteDisplayError(null)
+      setIsLoadingDisplayRoute(false)
+      return
+    }
+
+    if (!routeDisplayCandidate?.station.coordinates) {
+      setDisplayRoute(route)
+      setRouteDisplayError(null)
+      setIsLoadingDisplayRoute(false)
+      return
+    }
+
+    let ignore = false
+    setDisplayRoute(route)
+    setRouteDisplayError(null)
+    setIsLoadingDisplayRoute(true)
+
+    void (async () => {
+      try {
+        const nextDisplayRoute = await fetchRoute(startPoint, endPoint, {
+          lat: routeDisplayCandidate.station.coordinates!.lat,
+          lng: routeDisplayCandidate.station.coordinates!.lng,
+        })
+
+        if (!ignore) {
+          setDisplayRoute(nextDisplayRoute)
+        }
+      } catch (error) {
+        if (!ignore) {
+          setDisplayRoute(route)
+          setRouteDisplayError(
+            error instanceof Error
+              ? error.message
+              : 'Nepavyko parodyti maršruto per pasirinktą degalinę.',
+          )
+        }
+      } finally {
+        if (!ignore) {
+          setIsLoadingDisplayRoute(false)
+        }
+      }
+    })()
+
+    return () => {
+      ignore = true
+    }
+  }, [endPoint, route, routeDisplayCandidate, startPoint])
 
   useEffect(() => {
     if (!focusedStationId) {
@@ -661,8 +846,12 @@ function App() {
   }, [handleFetchSnapshot])
 
   async function handleFetchRoute() {
+    const requestId = routeCalculationRequestIdRef.current + 1
+    routeCalculationRequestIdRef.current = requestId
     setIsLoadingRoute(true)
     setRouteError(null)
+    setRouteDetourError(null)
+    setRouteDetours([])
 
     try {
       let nextStartPoint = startPoint
@@ -695,15 +884,88 @@ function App() {
       }
 
       const nextRoute = await fetchRoute(nextStartPoint, nextEndPoint)
+      const nextRouteCalculationKey = createRouteCalculationKey({
+        startPoint: nextStartPoint,
+        endPoint: nextEndPoint,
+        snapshotDate: snapshot?.snapshotDate,
+        networkFilter,
+        municipalityFilter,
+        areaQuery,
+        blacklistedNetworks,
+      })
+
       setRoute(nextRoute)
+      setDisplayRoute(nextRoute)
+      setFocusedStationId(null)
+      setMapFocusTarget(null)
+      setLastRouteCalculationKey(nextRouteCalculationKey)
+      setIsLoadingRouteDetours(true)
+      setIsLoadingRoute(false)
+      await yieldToBrowser()
+
+      if (routeCalculationRequestIdRef.current !== requestId) {
+        return
+      }
+
+      const nextRouteDetourStations = await createRouteDetourStationsAsync(
+        filteredStations,
+        nextRoute,
+        MAX_CORRIDOR_KM,
+        () => routeCalculationRequestIdRef.current !== requestId,
+      )
+
+      if (routeCalculationRequestIdRef.current !== requestId || !nextRouteDetourStations) {
+        return
+      }
+
+      if (nextRouteDetourStations.length === 0) {
+        setRouteDetours([])
+        setIsLoadingRouteDetours(false)
+        return
+      }
+
+      try {
+        const nextRouteDetours = await fetchRouteDetours(
+          nextStartPoint,
+          nextEndPoint,
+          nextRouteDetourStations,
+        )
+
+        if (routeCalculationRequestIdRef.current !== requestId) {
+          return
+        }
+
+        setRouteDetours(nextRouteDetours)
+      } catch (error) {
+        if (routeCalculationRequestIdRef.current !== requestId) {
+          return
+        }
+
+        setRouteDetours([])
+        setRouteDetourError(
+          error instanceof Error
+            ? error.message
+            : 'Nepavyko tiksliai apskaičiuoti papildomo kelio iki stotelių.',
+        )
+      } finally {
+        if (routeCalculationRequestIdRef.current === requestId) {
+          setIsLoadingRouteDetours(false)
+        }
+      }
     } catch (error) {
+      if (routeCalculationRequestIdRef.current !== requestId) {
+        return
+      }
+
       setRouteError(
         error instanceof Error
           ? error.message
           : 'Nepavyko apskaičiuoti maršruto pagal pasirinktus taškus.',
       )
     } finally {
-      setIsLoadingRoute(false)
+      if (routeCalculationRequestIdRef.current === requestId) {
+        setIsLoadingRoute(false)
+      }
     }
   }
 
@@ -778,8 +1040,17 @@ function App() {
   }
 
   function handleClearRoute() {
+    routeCalculationRequestIdRef.current += 1
     setRoute(null)
+    setDisplayRoute(null)
     setRouteError(null)
+    setRouteDetourError(null)
+    setRouteDisplayError(null)
+    setRouteDetours([])
+    setLastRouteCalculationKey(null)
+    setIsLoadingRoute(false)
+    setIsLoadingRouteDetours(false)
+    setIsLoadingDisplayRoute(false)
     setFocusedStationId(null)
     setMapFocusTarget(null)
     setActiveAddressField(null)
@@ -806,6 +1077,7 @@ function App() {
   }
 
   const routeResultLabel = 'Stotelės palei maršrutą'
+  const isResolvingRoute = isLoadingRoute || isLoadingRouteDetours || isLoadingDisplayRoute
 
   const routePanel = (
     <section className="panel">
@@ -903,8 +1175,8 @@ function App() {
         <span>{`Maksimalus papildomas kelias: ${corridorKm.toFixed(1)} km`}</span>
         <input
           type="range"
-          min="0.5"
-          max="10"
+            min="0.5"
+            max={MAX_CORRIDOR_KM}
           step="0.5"
           value={corridorKm}
           onChange={(event) => setCorridorKm(Number(event.target.value))}
@@ -936,18 +1208,18 @@ function App() {
       </div>
       <p className="panel-note">
         Stotelės palei maršrutą rodomos viename sąraše, o geriausias variantas paryškinamas pagal
-        pasirinktą kuro rūšį, planuojamą litražą ir numanomą papildomą kelią iki stotelės ir
-        atgal į maršrutą. Taškus galite įvesti adresais su automatiniais pasiūlymais arba pasirinkti
-        žemėlapyje.
+        pasirinktą kuro rūšį, planuojamą litražą ir tiksliai apskaičiuotą papildomą kelią tikru
+        kelių maršrutu iki stotelės ir atgal į kelionę. Taškus galite įvesti adresais su
+        automatiniais pasiūlymais arba pasirinkti žemėlapyje.
       </p>
       <div className="route-actions">
         <button
           type="button"
           className="primary-button"
           onClick={handleFetchRoute}
-          disabled={isLoadingRoute || filteredStations.length === 0}
+          disabled={isResolvingRoute || filteredStations.length === 0}
         >
-          {isLoadingRoute ? 'Skaičiuojama...' : 'Rasti degalines palei maršrutą'}
+          {isResolvingRoute ? 'Skaičiuojama...' : 'Rasti degalines palei maršrutą'}
         </button>
         <button type="button" className="secondary-button" onClick={handleClearRoute}>
           Išvalyti
@@ -958,7 +1230,23 @@ function App() {
           {`Maršrutas: ${formatDistance(route.distanceMeters)} • ${formatDuration(route.durationSeconds)}`}
         </p>
       )}
+      {routeDisplayCandidate && displayRoute && (
+        <p className="route-stats">
+          {`${focusedStationId === routeDisplayStationId ? 'Maršrutas per pasirinktą stotelę' : 'Maršrutas per geriausią stotelę'}: ${formatDistance(displayRoute.distanceMeters)} • ${formatDuration(displayRoute.durationSeconds)} (+${formatKilometers(routeDisplayCandidate.detourDistanceKm)} • +${formatDuration(routeDisplayCandidate.detourDurationSeconds)})`}
+        </p>
+      )}
       {routeError && <p className="route-error">{routeError}</p>}
+      {routeDetourError && <p className="route-error">{routeDetourError}</p>}
+      {routeDisplayError && <p className="route-error">{routeDisplayError}</p>}
+      {route && isRouteCalculationStale && (
+        <p className="panel-note">
+          Pakeitėte maršruto taškus arba filtrus. Paspauskite „Rasti degalines palei maršrutą“, kad
+          rezultatai būtų perskaičiuoti.
+        </p>
+      )}
+      {route && (isLoadingRouteDetours || isLoadingDisplayRoute) && (
+        <p className="panel-note">Tikslinami papildomo kelio skaičiavimai pagal realų kelių maršrutą.</p>
+      )}
     </section>
   )
 
@@ -1176,7 +1464,7 @@ function App() {
 
           <RouteMap
             stations={sortedFilteredStations}
-            route={route}
+            route={displayRoute ?? route}
             activeSelection={activePointSelectionMode}
             routeStationIds={routeStationIds}
             topStationId={topStationId}
@@ -1206,7 +1494,9 @@ function App() {
 
             {displayedStations.length === 0 ? (
               <p className="empty-state">
-                {route
+                {route && isLoadingRouteDetours
+                  ? 'Tikslinami maršruto stotelių skaičiavimai pagal realų kelių maršrutą.'
+                  : route
                   ? 'Neradome maršruto stotelių pagal pasirinktus filtrus ir kelionės nustatymus.'
                   : 'Kol kas nėra rodomų stotelių pagal pasirinktus filtrus.'}
               </p>
@@ -1270,7 +1560,7 @@ function App() {
                             className={routeCandidate ? 'table-number' : 'table-number table-number--muted'}
                           >
                             {routeCandidate
-                              ? formatKilometers(routeCandidate.estimatedDetourKm)
+                              ? formatKilometers(routeCandidate.detourDistanceKm)
                               : '—'}
                           </td>
                           <td
