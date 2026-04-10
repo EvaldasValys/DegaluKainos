@@ -28,7 +28,10 @@ type AddressFieldKey = 'start' | 'end'
 const AUTOCOMPLETE_MIN_QUERY_LENGTH = 3
 const AUTOCOMPLETE_DEBOUNCE_MS = 250
 const SNAPSHOT_REFRESH_DEBOUNCE_MS = 5000
+const DEFAULT_CORRIDOR_KM = 2.5
 const DEFAULT_BLACKLIST = ['Jozita']
+const DEFAULT_PLANNED_FUEL_LITERS = 40
+const DEFAULT_FUEL_CONSUMPTION_PER_100_KM = 7
 
 interface RouteCandidate {
   station: StationRecord
@@ -401,9 +404,11 @@ function App() {
   const [isSnapshotRefreshCoolingDown, setIsSnapshotRefreshCoolingDown] = useState(false)
   const [focusedStationId, setFocusedStationId] = useState<string | null>(null)
   const [mapFocusTarget, setMapFocusTarget] = useState<MapFocusTarget | null>(null)
-  const [corridorKm, setCorridorKm] = useState(2.5)
-  const [plannedFuelLiters, setPlannedFuelLiters] = useState(40)
-  const [fuelConsumptionPer100Km, setFuelConsumptionPer100Km] = useState(7)
+  const [corridorKm, setCorridorKm] = useState(DEFAULT_CORRIDOR_KM)
+  const [plannedFuelLiters, setPlannedFuelLiters] = useState(DEFAULT_PLANNED_FUEL_LITERS)
+  const [fuelConsumptionPer100Km, setFuelConsumptionPer100Km] = useState(
+    DEFAULT_FUEL_CONSUMPTION_PER_100_KM,
+  )
   const snapshotRefreshCooldownTimerRef = useRef<number | null>(null)
 
   const networks = useMemo(() => {
@@ -764,8 +769,14 @@ function App() {
     setRouteError(null)
     setFocusedStationId(null)
     setMapFocusTarget(null)
+    setActiveAddressField(null)
+    setStartAddress('')
+    setEndAddress('')
     setStartPoint(null)
     setEndPoint(null)
+    setCorridorKm(DEFAULT_CORRIDOR_KM)
+    setPlannedFuelLiters(DEFAULT_PLANNED_FUEL_LITERS)
+    setFuelConsumptionPer100Km(DEFAULT_FUEL_CONSUMPTION_PER_100_KM)
     setSelectionMode('start')
   }
 
