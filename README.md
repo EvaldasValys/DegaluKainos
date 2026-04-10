@@ -9,9 +9,7 @@ Web app for comparing Lithuania's fuel prices from LEA using a **published backe
 - Matches stations to OpenStreetMap fuel locations and caches coordinates
 - Falls back to limited station address geocoding when coordinates are missing
 - Lets users define route points **A** and **B** on the map or by entering **Lithuanian addresses with autocomplete**
-- Supports route comparison modes:
-  - all stations along the route
-  - cheapest stop based on price, planned liters, and estimated detour cost
+- Shows all stations along the route and highlights the best stop based on price, planned liters, and estimated detour cost
 - Supports filtering, sorting, and a gas station blacklist
 - Excludes blacklisted networks from the list, map, and route results (**Jozita** is blacklisted by default)
 

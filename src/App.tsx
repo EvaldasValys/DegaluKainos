@@ -21,7 +21,6 @@ import {
 import './App.css'
 
 type SortKey = 'price-asc' | 'price-desc' | 'network' | 'detour-asc' | 'total-cost-asc'
-type ComparisonMode = 'along-route' | 'cheapest-route'
 type ListVisibility = 'all' | 'priced' | 'mapped' | 'route'
 type PointInputMode = 'map' | 'address'
 type AddressFieldKey = 'start' | 'end'
@@ -120,10 +119,6 @@ function formatPoint(pointValue: RoutePoint | null, emptyLabel = 'Pasirinkite ž
 
 function formatKilometers(distanceKm: number) {
   return `${quantityFormatter.format(distanceKm)} km`
-}
-
-function formatLiters(liters: number) {
-  return `${quantityFormatter.format(liters)} l`
 }
 
 function formatDateTime(value: string) {
@@ -392,8 +387,7 @@ function App() {
   const [listVisibility, setListVisibility] = useState<ListVisibility>('all')
   const [sortBy, setSortBy] = useState<SortKey>('price-asc')
   const [selectionMode, setSelectionMode] = useState<'start' | 'end'>('start')
-  const [pointInputMode, setPointInputMode] = useState<PointInputMode>('map')
-  const [comparisonMode, setComparisonMode] = useState<ComparisonMode>('along-route')
+  const [pointInputMode, setPointInputMode] = useState<PointInputMode>('address')
   const [startPoint, setStartPoint] = useState<RoutePoint | null>(null)
   const [endPoint, setEndPoint] = useState<RoutePoint | null>(null)
   const [startAddress, setStartAddress] = useState('')
@@ -536,6 +530,7 @@ function App() {
       return bestCandidate
     }, null as RouteCandidate | null)
   }, [routeVisibleCandidates])
+  const featuredStationId = bestRouteCandidate?.station.id ?? null
 
   const sortedFilteredStations = useMemo(
     () =>
@@ -549,8 +544,18 @@ function App() {
     () =>
       routeVisibleCandidates
         .map((candidate) => candidate.station)
-        .sort((left, right) => compareStations(left, right, fuelKey, sortBy, routeCandidateMap)),
-    [fuelKey, routeCandidateMap, routeVisibleCandidates, sortBy],
+        .sort((left, right) => {
+          if (left.id === featuredStationId) {
+            return -1
+          }
+
+          if (right.id === featuredStationId) {
+            return 1
+          }
+
+          return compareStations(left, right, fuelKey, sortBy, routeCandidateMap)
+        }),
+    [featuredStationId, fuelKey, routeCandidateMap, routeVisibleCandidates, sortBy],
   )
 
   const displayedStations = useMemo(() => {
@@ -558,18 +563,13 @@ function App() {
       return sortedFilteredStations
     }
 
-    if (comparisonMode === 'cheapest-route') {
-      return bestRouteCandidate ? [bestRouteCandidate.station] : []
-    }
-
     return sortedRouteStations
-  }, [bestRouteCandidate, comparisonMode, route, sortedFilteredStations, sortedRouteStations])
+  }, [route, sortedFilteredStations, sortedRouteStations])
 
   const topStationId = displayedStations.at(0)?.id ?? null
   const activePointSelectionMode = pointInputMode === 'map' ? selectionMode : 'none'
   const emptyPointLabel =
     pointInputMode === 'map' ? 'Pasirinkite žemėlapyje' : 'Įveskite adresą'
-  const featuredStationId = bestRouteCandidate?.station.id ?? null
   const isStartAutocompleteActive =
     pointInputMode === 'address' && activeAddressField === 'start'
   const isEndAutocompleteActive = pointInputMode === 'address' && activeAddressField === 'end'
@@ -781,27 +781,12 @@ function App() {
     }))
   }
 
-  const routeResultLabel =
-    comparisonMode === 'cheapest-route'
-      ? 'Pigiausias sustojimas maršrute'
-      : 'Stotelės palei maršrutą'
+  const routeResultLabel = 'Stotelės palei maršrutą'
 
   const routePanel = (
     <section className="panel">
-      <h2>Maršrutas ir palyginimas</h2>
+      <h2>Maršrutas ir stotelės</h2>
       <div className="toggle-group">
-        <button
-          type="button"
-          className={
-            pointInputMode === 'map' ? 'toggle-button toggle-button--active' : 'toggle-button'
-          }
-          onClick={() => {
-            setPointInputMode('map')
-            setActiveAddressField(null)
-          }}
-        >
-          Rinkti taškus žemėlapyje
-        </button>
         <button
           type="button"
           className={
@@ -814,29 +799,17 @@ function App() {
         >
           Įvesti A ir B adresus
         </button>
-      </div>
-      <div className="toggle-group">
         <button
           type="button"
           className={
-            comparisonMode === 'along-route'
-              ? 'toggle-button toggle-button--active'
-              : 'toggle-button'
+            pointInputMode === 'map' ? 'toggle-button toggle-button--active' : 'toggle-button'
           }
-          onClick={() => setComparisonMode('along-route')}
+          onClick={() => {
+            setPointInputMode('map')
+            setActiveAddressField(null)
+          }}
         >
-          Visos stotelės palei maršrutą
-        </button>
-        <button
-          type="button"
-          className={
-            comparisonMode === 'cheapest-route'
-              ? 'toggle-button toggle-button--active'
-              : 'toggle-button'
-          }
-          onClick={() => setComparisonMode('cheapest-route')}
-        >
-          Pigiausias sustojimas
+          Rinkti taškus žemėlapyje
         </button>
       </div>
       {pointInputMode === 'map' ? (
@@ -938,9 +911,10 @@ function App() {
         </label>
       </div>
       <p className="panel-note">
-        Pigiausias sustojimas skaičiuojamas pagal pasirinktą kuro rūšį, planuojamą litražą ir
-        numanomą papildomą kelią iki stotelės ir atgal į maršrutą. Taškus galite pasirinkti
-        žemėlapyje arba įvesti adresais su automatiniais pasiūlymais.
+        Stotelės palei maršrutą rodomos viename sąraše, o geriausias variantas paryškinamas pagal
+        pasirinktą kuro rūšį, planuojamą litražą ir numanomą papildomą kelią iki stotelės ir
+        atgal į maršrutą. Taškus galite įvesti adresais su automatiniais pasiūlymais arba pasirinkti
+        žemėlapyje.
       </p>
       <div className="route-actions">
         <button
@@ -961,45 +935,6 @@ function App() {
         </p>
       )}
       {routeError && <p className="route-error">{routeError}</p>}
-      {route && comparisonMode === 'cheapest-route' && bestRouteCandidate && (
-        <div className="result-card">
-          <div className="result-card__header">
-            <div>
-              <span className="summary-label">Pigiausias sustojimas</span>
-              <strong>{bestRouteCandidate.station.network}</strong>
-            </div>
-            <span className="route-pill route-pill--best">Geriausias pasirinkimas</span>
-          </div>
-          <p className="address-text">{bestRouteCandidate.station.address}</p>
-          <div className="metric-grid">
-            <div className="metric-card">
-              <span className="metric-label">Kaina už litrą</span>
-              <strong>{formatFuelPrice(bestRouteCandidate.fuelPrice)}</strong>
-            </div>
-            <div className="metric-card">
-              <span className="metric-label">Pirkimo kaina</span>
-              <strong>{formatMoney(bestRouteCandidate.purchaseCost)}</strong>
-            </div>
-            <div className="metric-card">
-              <span className="metric-label">Papildomas kelias</span>
-              <strong>{formatKilometers(bestRouteCandidate.estimatedDetourKm)}</strong>
-            </div>
-            <div className="metric-card">
-              <span className="metric-label">Papildomos sąnaudos</span>
-              <strong>{formatLiters(bestRouteCandidate.detourFuelLiters)}</strong>
-            </div>
-            <div className="metric-card metric-card--wide">
-              <span className="metric-label">Numatoma bendra sustojimo kaina</span>
-              <strong>{formatMoney(bestRouteCandidate.totalEstimatedCost)}</strong>
-            </div>
-          </div>
-        </div>
-      )}
-      {route && comparisonMode === 'cheapest-route' && !bestRouteCandidate && (
-        <p className="panel-note">
-          Šiuo metu palei pasirinktą maršrutą nėra stotelių su žinoma pasirinkto kuro kaina.
-        </p>
-      )}
     </section>
   )
 
@@ -1008,11 +943,10 @@ function App() {
       <header className="hero">
         <div>
           <p className="eyebrow">Lietuvos degalų palyginimas</p>
-          <h1>Dienos kainos + maršruto režimai tarp A ir B</h1>
+          <h1>Dienos kainos palei maršrutą tarp A ir B</h1>
           <p className="hero-copy">
-            Naudokite paskelbtus LEA duomenis, filtruokite stoteles ir pasirinkite, ar norite
-            matyti visas degalines palei maršrutą, ar vieną pigiausią sustojimą pagal kainą ir
-            numatomą papildomą atstumą.
+            Naudokite paskelbtus LEA duomenis, įveskite kelionės pradžią ir pabaigą, filtruokite
+            stoteles ir matykite visas degalines palei maršrutą bei geriausią pažymėtą pasirinkimą.
           </p>
         </div>
         <div className="hero-actions">
@@ -1222,7 +1156,7 @@ function App() {
             activeSelection={activePointSelectionMode}
             routeStationIds={routeStationIds}
             topStationId={topStationId}
-            featuredStationId={comparisonMode === 'cheapest-route' ? featuredStationId : null}
+            featuredStationId={featuredStationId}
             focusedStationId={focusedStationId}
             focusTarget={mapFocusTarget}
             startPoint={startPoint}
@@ -1248,8 +1182,8 @@ function App() {
 
             {displayedStations.length === 0 ? (
               <p className="empty-state">
-                {route && comparisonMode === 'cheapest-route'
-                  ? 'Neradome maršruto stotelių, kurias būtų galima palyginti pagal kainą ir atstumą.'
+                {route
+                  ? 'Neradome maršruto stotelių pagal pasirinktus filtrus ir kelionės nustatymus.'
                   : 'Kol kas nėra rodomų stotelių pagal pasirinktus filtrus.'}
               </p>
             ) : (
