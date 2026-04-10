@@ -1010,7 +1010,7 @@ function App() {
           <p className="eyebrow">Lietuvos degalų palyginimas</p>
           <h1>Dienos kainos + maršruto režimai tarp A ir B</h1>
           <p className="hero-copy">
-            Naudokite paskelbtus ENA duomenis, filtruokite stoteles ir pasirinkite, ar norite
+            Naudokite paskelbtus LEA duomenis, filtruokite stoteles ir pasirinkite, ar norite
             matyti visas degalines palei maršrutą, ar vieną pigiausią sustojimą pagal kainą ir
             numatomą papildomą atstumą.
           </p>
@@ -1035,6 +1035,10 @@ function App() {
               <a href={snapshot.sourceUrl} target="_blank" rel="noreferrer">
                 Excel šaltinis
               </a>
+              <p className="source-attribution">
+                Duomenys: LEA. Pirminiai šaltiniai: degalinių tinklus valdančios įmonės, kurių
+                pavadinimai rodomi prie stočių.
+              </p>
             </div>
           )}
         </div>

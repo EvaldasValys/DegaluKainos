@@ -1,11 +1,11 @@
 # DegaluKainos
 
-Web app for comparing Lithuania's fuel prices from ENA using a **published backend snapshot** and finding stations along a route.
+Web app for comparing Lithuania's fuel prices from LEA using a **published backend snapshot** and finding stations along a route.
 
 ## Features
 
-- Serves public users from a **latest published snapshot** instead of fetching ENA data on every request
-- Parses ENA workbook prices for **95 benzinas**, **dyzelinas**, and **SND**
+- Serves public users from a **latest published snapshot** instead of fetching LEA data on every request
+- Parses LEA workbook prices for **95 benzinas**, **dyzelinas**, and **SND**
 - Matches stations to OpenStreetMap fuel locations and caches coordinates
 - Falls back to limited station address geocoding when coordinates are missing
 - Lets users define route points **A** and **B** on the map or by entering **Lithuanian addresses with autocomplete**
@@ -25,12 +25,12 @@ Public users only read from the already-published dataset:
 - `GET /api/geocode`
 - `GET /api/geocode/suggest`
 
-They do **not** trigger ENA workbook download/parsing/geocoding for the daily price snapshot.
+They do **not** trigger LEA workbook download/parsing/geocoding for the daily price snapshot.
 
 ### Admin refresh flow
 You publish fresh price data yourself:
 
-1. download the latest ENA workbook
+1. download the latest LEA workbook
 2. parse and normalize stations
 3. resolve station coordinates
 4. store the result in `data/snapshots/`
@@ -68,7 +68,7 @@ npm run start
 
 ## Publish a fresh snapshot manually
 
-For public hosting, publish the latest ENA dataset yourself instead of letting visitors trigger ingestion:
+For public hosting, publish the latest LEA dataset yourself instead of letting visitors trigger ingestion:
 
 ```bash
 npm run build
@@ -105,7 +105,7 @@ This command:
 
 - exits successfully if today's snapshot is already published
 - tries to publish today's snapshot if it is not published yet
-- exits successfully if today's ENA workbook is still not available
+- exits successfully if today's LEA workbook is still not available
 - only fails for real errors that need attention
 
 ## Optional protected refresh endpoint
@@ -145,7 +145,16 @@ For a public deployment:
 2. publish fresh data yourself with `npm run refresh:snapshot`
 3. optionally automate that command with cron, your host scheduler, or a protected remote trigger
 
-This keeps ENA workbook ingestion off the public request path.
+This keeps LEA workbook ingestion off the public request path.
+
+## Data attribution
+
+The app should display this attribution alongside published fuel data:
+
+- **Duomenys: LEA.**
+- **Pirminiai šaltiniai: degalinių tinklus valdančios įmonės.**
+
+In the UI, station network/company names are shown directly with each station entry, and the original workbook link is exposed as **Excel šaltinis**.
 
 ## Public-request caching
 
