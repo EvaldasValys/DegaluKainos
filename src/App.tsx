@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { lineString, point } from '@turf/helpers'
 import pointToLineDistance from '@turf/point-to-line-distance'
 import {
@@ -28,6 +28,7 @@ type AddressFieldKey = 'start' | 'end'
 
 const AUTOCOMPLETE_MIN_QUERY_LENGTH = 3
 const AUTOCOMPLETE_DEBOUNCE_MS = 250
+const SNAPSHOT_REFRESH_DEBOUNCE_MS = 5000
 const DEFAULT_BLACKLIST = ['Jozita']
 
 interface RouteCandidate {
@@ -403,11 +404,13 @@ function App() {
   const [route, setRoute] = useState<RouteResult | null>(null)
   const [routeError, setRouteError] = useState<string | null>(null)
   const [isLoadingRoute, setIsLoadingRoute] = useState(false)
+  const [isSnapshotRefreshCoolingDown, setIsSnapshotRefreshCoolingDown] = useState(false)
   const [focusedStationId, setFocusedStationId] = useState<string | null>(null)
   const [mapFocusTarget, setMapFocusTarget] = useState<MapFocusTarget | null>(null)
   const [corridorKm, setCorridorKm] = useState(2.5)
   const [plannedFuelLiters, setPlannedFuelLiters] = useState(40)
   const [fuelConsumptionPer100Km, setFuelConsumptionPer100Km] = useState(7)
+  const snapshotRefreshCooldownTimerRef = useRef<number | null>(null)
 
   const networks = useMemo(() => {
     const values = new Set((snapshot?.stations ?? []).map((station) => station.network))
@@ -590,6 +593,14 @@ function App() {
     }
   }, [blacklistedNetworkKeys, networkFilter])
 
+  useEffect(() => {
+    return () => {
+      if (snapshotRefreshCooldownTimerRef.current !== null) {
+        window.clearTimeout(snapshotRefreshCooldownTimerRef.current)
+      }
+    }
+  }, [])
+
   const handleFetchSnapshot = useCallback(async (forceRefresh = false) => {
     setIsLoadingSnapshot(true)
     setSnapshotError(null)
@@ -607,6 +618,25 @@ function App() {
       setIsLoadingSnapshot(false)
     }
   }, [])
+
+  const handleManualSnapshotRefresh = useCallback(() => {
+    if (isLoadingSnapshot || isSnapshotRefreshCoolingDown) {
+      return
+    }
+
+    setIsSnapshotRefreshCoolingDown(true)
+
+    if (snapshotRefreshCooldownTimerRef.current !== null) {
+      window.clearTimeout(snapshotRefreshCooldownTimerRef.current)
+    }
+
+    snapshotRefreshCooldownTimerRef.current = window.setTimeout(() => {
+      setIsSnapshotRefreshCoolingDown(false)
+      snapshotRefreshCooldownTimerRef.current = null
+    }, SNAPSHOT_REFRESH_DEBOUNCE_MS)
+
+    void handleFetchSnapshot(true)
+  }, [handleFetchSnapshot, isLoadingSnapshot, isSnapshotRefreshCoolingDown])
 
   useEffect(() => {
     void handleFetchSnapshot()
@@ -989,10 +1019,14 @@ function App() {
           <button
             type="button"
             className="primary-button"
-            onClick={() => void handleFetchSnapshot(true)}
-            disabled={isLoadingSnapshot}
+            onClick={handleManualSnapshotRefresh}
+            disabled={isLoadingSnapshot || isSnapshotRefreshCoolingDown}
           >
-            {isLoadingSnapshot ? 'Kraunama...' : 'Atnaujinti paskelbtus duomenis'}
+            {isLoadingSnapshot
+              ? 'Kraunama...'
+              : isSnapshotRefreshCoolingDown
+                ? 'Palaukite...'
+                : 'Atnaujinti paskelbtus duomenis'}
           </button>
           {snapshot && (
             <div className="source-meta">
