@@ -1289,7 +1289,7 @@ function App() {
                             .filter(Boolean)
                             .join(' ')}
                         >
-                          <td>
+                          <td data-label="Degalinė">
                             <button
                               type="button"
                               className="station-focus-button"
@@ -1300,24 +1300,30 @@ function App() {
                               <div className="address-text">{station.address}</div>
                             </button>
                           </td>
-                          <td>
+                          <td data-label="Vieta">
                             <span>{station.city}</span>
                             <div className="address-text">{station.municipality}</div>
                           </td>
-                          <td>{formatFuelPrice(station.prices.gasoline95)}</td>
-                          <td>{formatFuelPrice(station.prices.diesel)}</td>
-                          <td>{formatFuelPrice(station.prices.lpg)}</td>
-                          <td className={routeCandidate ? 'table-number' : 'table-number table-number--muted'}>
+                          <td data-label="95">{formatFuelPrice(station.prices.gasoline95)}</td>
+                          <td data-label="Dyzelinas">{formatFuelPrice(station.prices.diesel)}</td>
+                          <td data-label="SND">{formatFuelPrice(station.prices.lpg)}</td>
+                          <td
+                            data-label="Nuokrypis"
+                            className={routeCandidate ? 'table-number' : 'table-number table-number--muted'}
+                          >
                             {routeCandidate
                               ? formatKilometers(routeCandidate.estimatedDetourKm)
                               : '—'}
                           </td>
-                          <td className={routeCandidate ? 'table-number' : 'table-number table-number--muted'}>
+                          <td
+                            data-label="Numatoma kaina"
+                            className={routeCandidate ? 'table-number' : 'table-number table-number--muted'}
+                          >
                             {routeCandidate
                               ? formatMoney(routeCandidate.totalEstimatedCost)
                               : '—'}
                           </td>
-                          <td>
+                          <td data-label="Maršrutas">
                             {isFocusedStation ? (
                               <span className="route-pill route-pill--focus">Žiūrima žemėlapyje</span>
                             ) : isTopStation ? (
