@@ -23,7 +23,6 @@ import {
 } from './lib/api'
 import './App.css'
 
-type SortKey = 'price-asc' | 'price-desc' | 'network' | 'detour-asc' | 'total-cost-asc'
 type ListVisibility = 'all' | 'priced' | 'mapped' | 'route'
 type PointInputMode = 'map' | 'address'
 type AddressFieldKey = 'start' | 'end'
@@ -305,14 +304,12 @@ function compareStations(
   left: StationRecord,
   right: StationRecord,
   fuelKey: FuelKey,
-  sortBy: SortKey,
   routeCandidateMap: Map<string, RouteCandidate>,
 ) {
-  if (sortBy === 'network') {
-    return compareStationNames(left, right)
-  }
+  const leftValue = left.prices[fuelKey]
+  const rightValue = right.prices[fuelKey]
 
-  if (sortBy === 'detour-asc') {
+  if (leftValue === null && rightValue === null) {
     return (
       compareNullableNumbers(
         routeCandidateMap.get(left.id)?.detourDistanceKm ?? null,
@@ -321,29 +318,12 @@ function compareStations(
     )
   }
 
-  if (sortBy === 'total-cost-asc') {
-    return (
-      compareNullableNumbers(
-        routeCandidateMap.get(left.id)?.totalEstimatedCost ?? null,
-        routeCandidateMap.get(right.id)?.totalEstimatedCost ?? null,
-      ) ||
-      compareNullableNumbers(
-        routeCandidateMap.get(left.id)?.detourDistanceKm ?? null,
-        routeCandidateMap.get(right.id)?.detourDistanceKm ?? null,
-      ) ||
-      compareStationNames(left, right)
-    )
-  }
-
-  const leftValue = left.prices[fuelKey]
-  const rightValue = right.prices[fuelKey]
-
-  if (leftValue === null && rightValue === null) {
-    return compareStationNames(left, right)
-  }
-
   return (
-    compareNullableNumbers(leftValue, rightValue, sortBy === 'price-desc' ? 'desc' : 'asc') ||
+    compareNullableNumbers(leftValue, rightValue) ||
+    compareNullableNumbers(
+      routeCandidateMap.get(left.id)?.detourDistanceKm ?? null,
+      routeCandidateMap.get(right.id)?.detourDistanceKm ?? null,
+    ) ||
     compareStationNames(left, right)
   )
 }
@@ -485,7 +465,6 @@ function App() {
   const [municipalityFilter, setMunicipalityFilter] = useState('all')
   const [areaQuery, setAreaQuery] = useState('')
   const [listVisibility, setListVisibility] = useState<ListVisibility>('all')
-  const [sortBy, setSortBy] = useState<SortKey>('price-asc')
   const [selectionMode, setSelectionMode] = useState<'start' | 'end'>('start')
   const [pointInputMode, setPointInputMode] = useState<PointInputMode>('address')
   const [startPoint, setStartPoint] = useState<RoutePoint | null>(null)
@@ -651,27 +630,17 @@ function App() {
   const sortedFilteredStations = useMemo(
     () =>
       [...listVisibleStations].sort((left, right) =>
-        compareStations(left, right, fuelKey, sortBy, routeCandidateMap),
+        compareStations(left, right, fuelKey, routeCandidateMap),
       ),
-    [fuelKey, listVisibleStations, routeCandidateMap, sortBy],
+    [fuelKey, listVisibleStations, routeCandidateMap],
   )
 
   const sortedRouteStations = useMemo(
     () =>
       routeVisibleCandidates
         .map((candidate) => candidate.station)
-        .sort((left, right) => {
-          if (left.id === featuredStationId) {
-            return -1
-          }
-
-          if (right.id === featuredStationId) {
-            return 1
-          }
-
-          return compareStations(left, right, fuelKey, sortBy, routeCandidateMap)
-        }),
-    [featuredStationId, fuelKey, routeCandidateMap, routeVisibleCandidates, sortBy],
+        .sort((left, right) => compareStations(left, right, fuelKey, routeCandidateMap)),
+    [fuelKey, routeCandidateMap, routeVisibleCandidates],
   )
 
   const displayedStations = useMemo(() => {
@@ -1325,7 +1294,7 @@ function App() {
       <div className="content-grid">
         <aside className="sidebar">
           <section className="panel">
-            <h2>Filtrai ir rikiavimas</h2>
+            <h2>Filtrai</h2>
             <label className="field">
               <span>Kuras</span>
               <select
@@ -1387,16 +1356,6 @@ function App() {
                 onChange={(event) => setAreaQuery(event.target.value)}
                 placeholder="Pvz. Vilnius, Kaunas, Kalvarijų"
               />
-            </label>
-            <label className="field">
-              <span>Rikiuoti</span>
-              <select value={sortBy} onChange={(event) => setSortBy(event.target.value as SortKey)}>
-                <option value="price-asc">Pigiausia viršuje</option>
-                <option value="price-desc">Brangiausia viršuje</option>
-                <option value="network">Pagal tinklą / adresą</option>
-                <option value="detour-asc">Trumpiausias papildomas kelias</option>
-                <option value="total-cost-asc">Mažiausia numatoma sustojimo kaina</option>
-              </select>
             </label>
           </section>
 
