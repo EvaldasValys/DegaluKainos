@@ -138,6 +138,18 @@ function formatDateTime(value: string) {
   return dateTimeFormatter.format(parsedDate)
 }
 
+function parseNumberInputValue(value: string) {
+  const normalizedValue = value.trim().replace(',', '.')
+
+  if (!normalizedValue) {
+    return null
+  }
+
+  const parsedValue = Number(normalizedValue)
+
+  return Number.isFinite(parsedValue) ? parsedValue : null
+}
+
 function normalizeNetworkName(value: string) {
   return value.trim().toLowerCase()
 }
@@ -489,8 +501,14 @@ function App() {
   const [mapFocusTarget, setMapFocusTarget] = useState<MapFocusTarget | null>(null)
   const [corridorKm, setCorridorKm] = useState(DEFAULT_CORRIDOR_KM)
   const [plannedFuelLiters, setPlannedFuelLiters] = useState(DEFAULT_PLANNED_FUEL_LITERS)
+  const [plannedFuelLitersInput, setPlannedFuelLitersInput] = useState(
+    String(DEFAULT_PLANNED_FUEL_LITERS),
+  )
   const [fuelConsumptionPer100Km, setFuelConsumptionPer100Km] = useState(
     DEFAULT_FUEL_CONSUMPTION_PER_100_KM,
+  )
+  const [fuelConsumptionPer100KmInput, setFuelConsumptionPer100KmInput] = useState(
+    String(DEFAULT_FUEL_CONSUMPTION_PER_100_KM),
   )
   const snapshotRefreshCooldownTimerRef = useRef<number | null>(null)
   const routeCalculationRequestIdRef = useRef(0)
@@ -985,6 +1003,34 @@ function App() {
     }
   }
 
+  function handlePlannedFuelLitersChange(value: string) {
+    setPlannedFuelLitersInput(value)
+
+    const parsedValue = parseNumberInputValue(value)
+
+    if (parsedValue !== null) {
+      setPlannedFuelLiters(Math.max(parsedValue, 1))
+    }
+  }
+
+  function handlePlannedFuelLitersBlur() {
+    setPlannedFuelLitersInput(String(plannedFuelLiters))
+  }
+
+  function handleFuelConsumptionChange(value: string) {
+    setFuelConsumptionPer100KmInput(value)
+
+    const parsedValue = parseNumberInputValue(value)
+
+    if (parsedValue !== null) {
+      setFuelConsumptionPer100Km(Math.max(parsedValue, 0.1))
+    }
+  }
+
+  function handleFuelConsumptionBlur() {
+    setFuelConsumptionPer100KmInput(String(fuelConsumptionPer100Km))
+  }
+
   function handleAddBlacklistedNetwork() {
     const trimmedValue = blacklistInput.trim()
 
@@ -1029,7 +1075,9 @@ function App() {
     setEndPoint(null)
     setCorridorKm(DEFAULT_CORRIDOR_KM)
     setPlannedFuelLiters(DEFAULT_PLANNED_FUEL_LITERS)
+    setPlannedFuelLitersInput(String(DEFAULT_PLANNED_FUEL_LITERS))
     setFuelConsumptionPer100Km(DEFAULT_FUEL_CONSUMPTION_PER_100_KM)
+    setFuelConsumptionPer100KmInput(String(DEFAULT_FUEL_CONSUMPTION_PER_100_KM))
     setSelectionMode('start')
   }
 
@@ -1158,8 +1206,10 @@ function App() {
             type="number"
             min="1"
             step="1"
-            value={plannedFuelLiters}
-            onChange={(event) => setPlannedFuelLiters(Math.max(Number(event.target.value) || 0, 1))}
+            value={plannedFuelLitersInput}
+            onChange={(event) => handlePlannedFuelLitersChange(event.target.value)}
+            onBlur={handlePlannedFuelLitersBlur}
+            onFocus={(event) => event.target.select()}
           />
         </label>
         <label className="field field--compact">
@@ -1168,10 +1218,10 @@ function App() {
             type="number"
             min="0.1"
             step="0.1"
-            value={fuelConsumptionPer100Km}
-            onChange={(event) =>
-              setFuelConsumptionPer100Km(Math.max(Number(event.target.value) || 0, 0.1))
-            }
+            value={fuelConsumptionPer100KmInput}
+            onChange={(event) => handleFuelConsumptionChange(event.target.value)}
+            onBlur={handleFuelConsumptionBlur}
+            onFocus={(event) => event.target.select()}
           />
         </label>
       </div>
