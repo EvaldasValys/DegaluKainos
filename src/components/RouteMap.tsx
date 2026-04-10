@@ -23,6 +23,7 @@ interface RouteMapProps {
     stationId: string
     requestId: number
   } | null
+  currentLocation: RoutePoint | null
   startPoint: RoutePoint | null
   endPoint: RoutePoint | null
   onMapPick: (point: RoutePoint) => void
@@ -41,6 +42,7 @@ function createMarker(className: string, label: string) {
 const stationIcon = createMarker('map-marker--station', '')
 const reachableIcon = createMarker('map-marker--reachable', '')
 const highlightedStationIcon = createMarker('map-marker--featured', '€')
+const currentLocationIcon = createMarker('map-marker--me', 'M')
 const startIcon = createMarker('map-marker--start', 'A')
 const endIcon = createMarker('map-marker--end', 'B')
 
@@ -80,25 +82,31 @@ function LocationPicker({
 }
 
 function FitToContent({
+  currentLocation,
   startPoint,
   endPoint,
   route,
-}: Pick<RouteMapProps, 'startPoint' | 'endPoint' | 'route'>) {
+}: Pick<RouteMapProps, 'currentLocation' | 'startPoint' | 'endPoint' | 'route'>) {
   const map = useMap()
 
   useEffect(() => {
     const points = route
       ? route.geometry.map(([lng, lat]) => latLng(lat, lng))
-      : [startPoint, endPoint]
+      : [currentLocation, startPoint, endPoint]
           .filter((point): point is RoutePoint => point !== null)
           .map((point) => latLng(point.lat, point.lng))
 
-    if (points.length < 2) {
+    if (points.length === 0) {
+      return
+    }
+
+    if (points.length === 1) {
+      map.flyTo(points[0], Math.max(map.getZoom(), 13), { duration: 0.6 })
       return
     }
 
     map.fitBounds(latLngBounds(points), { padding: [28, 28] })
-  }, [map, route, startPoint, endPoint])
+  }, [currentLocation, endPoint, map, route, startPoint])
 
   return null
 }
@@ -140,6 +148,7 @@ export function RouteMap({
   featuredStationId,
   focusedStationId,
   focusTarget,
+  currentLocation,
   startPoint,
   endPoint,
   onMapPick,
@@ -154,10 +163,18 @@ export function RouteMap({
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
         <LocationPicker activeSelection={activeSelection} onMapPick={onMapPick} />
-        <FitToContent route={route} startPoint={startPoint} endPoint={endPoint} />
+        <FitToContent
+          route={route}
+          currentLocation={currentLocation}
+          startPoint={startPoint}
+          endPoint={endPoint}
+        />
         <FocusOnStation focusTarget={focusTarget} stations={stations} />
         {routeLine.length > 0 && (
           <Polyline positions={routeLine} pathOptions={{ color: '#ff6b35', weight: 5 }} />
+        )}
+        {currentLocation && (
+          <Marker position={[currentLocation.lat, currentLocation.lng]} icon={currentLocationIcon} />
         )}
         {startPoint && <Marker position={[startPoint.lat, startPoint.lng]} icon={startIcon} />}
         {endPoint && <Marker position={[endPoint.lat, endPoint.lng]} icon={endIcon} />}

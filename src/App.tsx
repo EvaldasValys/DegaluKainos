@@ -31,11 +31,13 @@ const AUTOCOMPLETE_MIN_QUERY_LENGTH = 3
 const AUTOCOMPLETE_DEBOUNCE_MS = 250
 const SNAPSHOT_REFRESH_DEBOUNCE_MS = 5000
 const DEFAULT_CORRIDOR_KM = 2.5
+const NEARBY_CONTEXT_RADIUS_KM = 5
 const MAX_CORRIDOR_KM = 10
 const ROUTE_DETOUR_CHUNK_SIZE = 50
 const DEFAULT_BLACKLIST = ['Jozita']
 const DEFAULT_PLANNED_FUEL_LITERS = 40
 const DEFAULT_FUEL_CONSUMPTION_PER_100_KM = 7
+const DEFAULT_DISCOVERY_RESULTS_LIMIT = 12
 
 interface RouteCandidate {
   station: StationRecord
@@ -152,6 +154,22 @@ function parseNumberInputValue(value: string) {
 
 function normalizeNetworkName(value: string) {
   return value.trim().toLowerCase()
+}
+
+function calculateDistanceBetweenPointsKm(start: RoutePoint, end: RoutePoint) {
+  const earthRadiusKm = 6371
+  const latDistance = ((end.lat - start.lat) * Math.PI) / 180
+  const lngDistance = ((end.lng - start.lng) * Math.PI) / 180
+  const startLatRadians = (start.lat * Math.PI) / 180
+  const endLatRadians = (end.lat * Math.PI) / 180
+  const haversineDistance =
+    Math.sin(latDistance / 2) * Math.sin(latDistance / 2) +
+    Math.cos(startLatRadians) *
+      Math.cos(endLatRadians) *
+      Math.sin(lngDistance / 2) *
+      Math.sin(lngDistance / 2)
+
+  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(haversineDistance), Math.sqrt(1 - haversineDistance))
 }
 
 function addBlacklistedNetwork(existingNetworks: string[], value: string) {
@@ -340,6 +358,27 @@ function compareStations(
   )
 }
 
+function findCheapestStationForFuel(stations: StationRecord[], fuelKey: FuelKey) {
+  let bestStation: StationRecord | null = null
+
+  for (const station of stations) {
+    if (station.prices[fuelKey] === null) {
+      continue
+    }
+
+    if (
+      !bestStation ||
+      compareNullableNumbers(station.prices[fuelKey], bestStation.prices[fuelKey]) < 0 ||
+      (station.prices[fuelKey] === bestStation.prices[fuelKey] &&
+        compareStationNames(station, bestStation) < 0)
+    ) {
+      bestStation = station
+    }
+  }
+
+  return bestStation
+}
+
 function calculateRouteCandidate(
   station: StationRecord,
   detourMetrics: RouteDetourResult | undefined,
@@ -441,7 +480,6 @@ function createRouteCalculationKey({
   snapshotDate,
   networkFilter,
   municipalityFilter,
-  areaQuery,
   blacklistedNetworks,
 }: {
   startPoint: RoutePoint | null
@@ -449,7 +487,6 @@ function createRouteCalculationKey({
   snapshotDate: string | undefined
   networkFilter: string
   municipalityFilter: string
-  areaQuery: string
   blacklistedNetworks: string[]
 }) {
   const normalizedBlacklist = [...blacklistedNetworks]
@@ -461,9 +498,8 @@ function createRouteCalculationKey({
     snapshotDate ?? 'no-snapshot',
     formatRouteCalculationKeyPoint(startPoint),
     formatRouteCalculationKeyPoint(endPoint),
-    networkFilter,
-    municipalityFilter,
-    areaQuery.trim().toLowerCase(),
+    networkFilter.trim().toLowerCase(),
+    municipalityFilter.trim().toLowerCase(),
     normalizedBlacklist,
   ].join('::')
 }
@@ -473,9 +509,8 @@ function App() {
   const [snapshotError, setSnapshotError] = useState<string | null>(null)
   const [isLoadingSnapshot, setIsLoadingSnapshot] = useState(false)
   const [fuelKey, setFuelKey] = useState<FuelKey>('gasoline95')
-  const [networkFilter, setNetworkFilter] = useState('all')
-  const [municipalityFilter, setMunicipalityFilter] = useState('all')
-  const [areaQuery, setAreaQuery] = useState('')
+  const [networkFilter, setNetworkFilter] = useState('')
+  const [municipalityFilter, setMunicipalityFilter] = useState('')
   const [listVisibility, setListVisibility] = useState<ListVisibility>('all')
   const [selectionMode, setSelectionMode] = useState<'start' | 'end'>('start')
   const [pointInputMode, setPointInputMode] = useState<PointInputMode>('address')
@@ -483,6 +518,9 @@ function App() {
   const [endPoint, setEndPoint] = useState<RoutePoint | null>(null)
   const [startAddress, setStartAddress] = useState('')
   const [endAddress, setEndAddress] = useState('')
+  const [userLocation, setUserLocation] = useState<RoutePoint | null>(null)
+  const [isLocatingUser, setIsLocatingUser] = useState(false)
+  const [userLocationError, setUserLocationError] = useState<string | null>(null)
   const [blacklistedNetworks, setBlacklistedNetworks] = useState<string[]>(DEFAULT_BLACKLIST)
   const [blacklistInput, setBlacklistInput] = useState('')
   const [activeAddressField, setActiveAddressField] = useState<AddressFieldKey | null>(null)
@@ -510,8 +548,10 @@ function App() {
   const [fuelConsumptionPer100KmInput, setFuelConsumptionPer100KmInput] = useState(
     String(DEFAULT_FUEL_CONSUMPTION_PER_100_KM),
   )
+  const [showAllDefaultResults, setShowAllDefaultResults] = useState(false)
   const snapshotRefreshCooldownTimerRef = useRef<number | null>(null)
   const routeCalculationRequestIdRef = useRef(0)
+  const requestedUserLocationOnLoadRef = useRef(false)
 
   const networks = useMemo(() => {
     const values = new Set((snapshot?.stations ?? []).map((station) => station.network))
@@ -535,28 +575,31 @@ function App() {
   }, [snapshot])
 
   const filteredStations = useMemo(() => {
-    const query = areaQuery.trim().toLowerCase()
+    const normalizedNetworkFilter = networkFilter.trim().toLowerCase()
+    const normalizedMunicipalityFilter = municipalityFilter.trim().toLowerCase()
 
     return (snapshot?.stations ?? []).filter((station) => {
       if (blacklistedNetworkKeys.has(normalizeNetworkName(station.network))) {
         return false
       }
 
-      if (networkFilter !== 'all' && station.network !== networkFilter) {
+      if (
+        normalizedNetworkFilter.length > 0 &&
+        !station.network.toLowerCase().includes(normalizedNetworkFilter)
+      ) {
         return false
       }
 
-      if (municipalityFilter !== 'all' && station.municipality !== municipalityFilter) {
-        return false
-      }
-
-      if (query.length > 0 && !station.searchableText.includes(query)) {
+      if (
+        normalizedMunicipalityFilter.length > 0 &&
+        !station.municipality.toLowerCase().includes(normalizedMunicipalityFilter)
+      ) {
         return false
       }
 
       return true
     })
-  }, [areaQuery, blacklistedNetworkKeys, municipalityFilter, networkFilter, snapshot])
+  }, [blacklistedNetworkKeys, municipalityFilter, networkFilter, snapshot])
 
   const routeDetourMap = useMemo(
     () => new Map(routeDetours.map((detour) => [detour.stationId, detour])),
@@ -593,6 +636,25 @@ function App() {
     () => new Map(routeCandidates.map((candidate) => [candidate.station.id, candidate])),
     [routeCandidates],
   )
+  const distanceFromUserMap = useMemo(() => {
+    if (!userLocation) {
+      return new Map<string, number>()
+    }
+
+    return new Map(
+      filteredStations.flatMap((station) =>
+        station.coordinates
+          ? [[
+              station.id,
+              calculateDistanceBetweenPointsKm(userLocation, {
+                lat: station.coordinates.lat,
+                lng: station.coordinates.lng,
+              }),
+            ]]
+          : [],
+      ),
+    )
+  }, [filteredStations, userLocation])
 
   const routeVisibleCandidates = useMemo(
     () =>
@@ -660,19 +722,42 @@ function App() {
         .sort((left, right) => compareStations(left, right, fuelKey, routeCandidateMap)),
     [fuelKey, routeCandidateMap, routeVisibleCandidates],
   )
+  const isUsingDefaultBlacklist = useMemo(() => {
+    if (blacklistedNetworks.length !== DEFAULT_BLACKLIST.length) {
+      return false
+    }
+
+    const defaultBlacklistKeys = new Set(DEFAULT_BLACKLIST.map((network) => normalizeNetworkName(network)))
+
+    return blacklistedNetworks.every((network) =>
+      defaultBlacklistKeys.has(normalizeNetworkName(network)),
+    )
+  }, [blacklistedNetworks])
+  const isDefaultDiscoveryState =
+    route === null &&
+    networkFilter.trim().length === 0 &&
+    municipalityFilter.trim().length === 0 &&
+    listVisibility === 'all' &&
+    isUsingDefaultBlacklist
+  const isShowingCuratedStations =
+    isDefaultDiscoveryState &&
+    !showAllDefaultResults &&
+    sortedFilteredStations.length > DEFAULT_DISCOVERY_RESULTS_LIMIT
 
   const displayedStations = useMemo(() => {
+    if (isShowingCuratedStations) {
+      return sortedFilteredStations.slice(0, DEFAULT_DISCOVERY_RESULTS_LIMIT)
+    }
+
     if (!route) {
       return sortedFilteredStations
     }
 
     return sortedRouteStations
-  }, [route, sortedFilteredStations, sortedRouteStations])
+  }, [isShowingCuratedStations, route, sortedFilteredStations, sortedRouteStations])
 
   const topStationId = displayedStations.at(0)?.id ?? null
   const activePointSelectionMode = pointInputMode === 'map' ? selectionMode : 'none'
-  const emptyPointLabel =
-    pointInputMode === 'map' ? 'Pasirinkite žemėlapyje' : 'Įveskite adresą'
   const isStartAutocompleteActive =
     pointInputMode === 'address' && activeAddressField === 'start'
   const isEndAutocompleteActive = pointInputMode === 'address' && activeAddressField === 'end'
@@ -689,6 +774,27 @@ function App() {
       ).length,
     [blacklistedNetworkKeys, snapshot],
   )
+  const nearbyHeroStations = useMemo(
+    () =>
+      userLocation
+        ? filteredStations.filter((station) => {
+            const distanceKm = distanceFromUserMap.get(station.id)
+            return distanceKm !== undefined && distanceKm <= NEARBY_CONTEXT_RADIUS_KM
+          })
+        : filteredStations,
+    [distanceFromUserMap, filteredStations, userLocation],
+  )
+  const cheapestStationsByFuel = useMemo(
+    () =>
+      FUEL_KEYS.reduce(
+        (accumulator, key) => {
+          accumulator[key] = findCheapestStationForFuel(nearbyHeroStations, key)
+          return accumulator
+        },
+        {} as Record<FuelKey, StationRecord | null>,
+      ),
+    [nearbyHeroStations],
+  )
   const currentRouteCalculationKey = useMemo(
     () =>
       createRouteCalculationKey({
@@ -697,11 +803,9 @@ function App() {
         snapshotDate: snapshot?.snapshotDate,
         networkFilter,
         municipalityFilter,
-        areaQuery,
         blacklistedNetworks,
       }),
     [
-      areaQuery,
       blacklistedNetworks,
       endPoint,
       municipalityFilter,
@@ -778,10 +882,16 @@ function App() {
   }, [displayedStations, focusedStationId])
 
   useEffect(() => {
-    if (networkFilter !== 'all' && blacklistedNetworkKeys.has(normalizeNetworkName(networkFilter))) {
-      setNetworkFilter('all')
+    if (networkFilter && blacklistedNetworkKeys.has(normalizeNetworkName(networkFilter))) {
+      setNetworkFilter('')
     }
   }, [blacklistedNetworkKeys, networkFilter])
+
+  useEffect(() => {
+    if (!isDefaultDiscoveryState) {
+      setShowAllDefaultResults(false)
+    }
+  }, [isDefaultDiscoveryState])
 
   useEffect(() => {
     return () => {
@@ -877,7 +987,6 @@ function App() {
         snapshotDate: snapshot?.snapshotDate,
         networkFilter,
         municipalityFilter,
-        areaQuery,
         blacklistedNetworks,
       })
 
@@ -1003,6 +1112,60 @@ function App() {
     }
   }
 
+  const handleRequestUserLocation = useCallback(() => {
+    if (!navigator.geolocation) {
+      setUserLocationError('Jūsų naršyklė nepalaiko vietos nustatymo.')
+      return
+    }
+
+    setIsLocatingUser(true)
+    setUserLocationError(null)
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setUserLocation({
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+        })
+        setIsLocatingUser(false)
+      },
+      (error) => {
+        const errorMessage =
+          error.code === error.PERMISSION_DENIED
+            ? 'Vietos leidimas nebuvo suteiktas.'
+            : 'Nepavyko nustatyti jūsų vietos.'
+        setUserLocationError(errorMessage)
+        setIsLocatingUser(false)
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 1000 * 60 * 5,
+      },
+    )
+  }, [])
+
+  useEffect(() => {
+    if (requestedUserLocationOnLoadRef.current) {
+      return
+    }
+
+    requestedUserLocationOnLoadRef.current = true
+    handleRequestUserLocation()
+  }, [handleRequestUserLocation])
+
+  function handleUseCurrentLocationAsStart() {
+    if (!userLocation) {
+      handleRequestUserLocation()
+      return
+    }
+
+    setPointInputMode('address')
+    setStartPoint(userLocation)
+    setStartAddress('Mano vieta')
+    setRouteError(null)
+  }
+
   function handlePlannedFuelLitersChange(value: string) {
     setPlannedFuelLitersInput(value)
 
@@ -1073,6 +1236,7 @@ function App() {
     setEndAddress('')
     setStartPoint(null)
     setEndPoint(null)
+    setUserLocationError(null)
     setCorridorKm(DEFAULT_CORRIDOR_KM)
     setPlannedFuelLiters(DEFAULT_PLANNED_FUEL_LITERS)
     setPlannedFuelLitersInput(String(DEFAULT_PLANNED_FUEL_LITERS))
@@ -1093,12 +1257,22 @@ function App() {
     }))
   }
 
-  const routeResultLabel = 'Stotelės palei maršrutą'
   const isResolvingRoute = isLoadingRoute || isLoadingRouteDetours || isLoadingDisplayRoute
+  const heroHeadline = route && bestRouteCandidate ? 'Kur pigiausia užsipilti pakeliui?' : 'Kur pigiausia užsipilti šiandien?'
+  const heroFuelStripNote = userLocation
+    ? `Pagal dabartinius filtrus ir iki ${NEARBY_CONTEXT_RADIUS_KM} km nuo jūsų vietos.`
+    : 'Pagal dabartinius filtrus visoje Lietuvoje.'
+  const resultsTitleCount = isShowingCuratedStations
+    ? `${displayedStations.length} iš ${sortedFilteredStations.length}`
+    : String(displayedStations.length)
 
   const routePanel = (
     <section className="panel">
       <h2>Maršrutas ir stotelės</h2>
+      <p className="panel-note">
+        Taškus galite įvesti adresais arba pasirinkti žemėlapyje. Geriausias sustojimas vertinamas
+        pagal pasirinktą kuro rūšį, planuojamą litražą ir tiksliai apskaičiuotą papildomą kelią.
+      </p>
       <div className="toggle-group">
         <button
           type="button"
@@ -1178,16 +1352,20 @@ function App() {
           />
         </div>
       )}
-      <div className="point-summary">
-        <div>
-          <span>Taškas A</span>
-          <strong>{formatPoint(startPoint, emptyPointLabel)}</strong>
-        </div>
-        <div>
-          <span>Taškas B</span>
-          <strong>{formatPoint(endPoint, emptyPointLabel)}</strong>
-        </div>
+      <div className="route-utility-actions">
+        <button
+          type="button"
+          className="secondary-button"
+          onClick={handleUseCurrentLocationAsStart}
+          disabled={isLocatingUser}
+        >
+          Naudoti mano vietą taškui A
+        </button>
       </div>
+      {userLocation && (
+        <p className="panel-note">{`Jūsų vieta: ${formatPoint(userLocation, 'Nėra vietos duomenų')}`}</p>
+      )}
+      {userLocationError && <p className="route-error">{userLocationError}</p>}
       <label className="field">
         <span>{`Maksimalus papildomas kelias: ${corridorKm.toFixed(1)} km`}</span>
         <input
@@ -1225,12 +1403,6 @@ function App() {
           />
         </label>
       </div>
-      <p className="panel-note">
-        Stotelės palei maršrutą rodomos viename sąraše, o geriausias variantas paryškinamas pagal
-        pasirinktą kuro rūšį, planuojamą litražą ir tiksliai apskaičiuotą papildomą kelią tikru
-        kelių maršrutu iki stotelės ir atgal į kelionę. Taškus galite įvesti adresais su
-        automatiniais pasiūlymais arba pasirinkti žemėlapyje.
-      </p>
       <div className="route-actions">
         <button
           type="button"
@@ -1272,61 +1444,88 @@ function App() {
   return (
     <div className="app-shell">
       <header className="hero">
-        <div>
-          <p className="eyebrow">Lietuvos degalų palyginimas</p>
-          <h1>Dienos kainos palei maršrutą tarp A ir B</h1>
-          <p className="hero-copy">
-            Naudokite paskelbtus LEA duomenis, įveskite kelionės pradžią ir pabaigą, filtruokite
-            stoteles ir matykite visas degalines palei maršrutą bei geriausią pažymėtą pasirinkimą.
-          </p>
-        </div>
-        <div className="hero-actions">
-          <button
-            type="button"
-            className="primary-button"
-            onClick={handleManualSnapshotRefresh}
-            disabled={isLoadingSnapshot || isSnapshotRefreshCoolingDown}
-          >
-            {isLoadingSnapshot
-              ? 'Kraunama...'
-              : isSnapshotRefreshCoolingDown
-                ? 'Palaukite...'
-                : 'Atnaujinti paskelbtus duomenis'}
-          </button>
+        <section className="hero-banner">
+          <div className="hero-banner__top">
+            <div className="hero-banner__copy">
+              <p className="eyebrow">Lietuvos degalų palyginimas</p>
+              <h1>{heroHeadline}</h1>
+              <p className="hero-copy">
+                LEA kainos, maršruto sustojimai ir artimiausios stotelės viename trumpame vaizde.
+              </p>
+            </div>
+            <div className="hero-actions">
+              <button
+                type="button"
+                className="primary-button"
+                onClick={handleManualSnapshotRefresh}
+                disabled={isLoadingSnapshot || isSnapshotRefreshCoolingDown}
+              >
+                {isLoadingSnapshot
+                  ? 'Kraunama...'
+                  : isSnapshotRefreshCoolingDown
+                    ? 'Palaukite...'
+                    : 'Atnaujinti paskelbtus duomenis'}
+              </button>
+            </div>
+          </div>
           {snapshot && (
-            <div className="source-meta">
-              <span>{`Data: ${snapshot.snapshotDate}`}</span>
-              <span>{`Paskelbta: ${formatDateTime(snapshot.fetchedAt)}`}</span>
+            <div className="hero-banner__meta">
+              <span>{`Duomenys už ${snapshot.snapshotDate}`}</span>
+              <span>{`Atnaujinta ${formatDateTime(snapshot.fetchedAt)}`}</span>
               <a href={snapshot.sourceUrl} target="_blank" rel="noreferrer">
                 Excel šaltinis
               </a>
-              <p className="source-attribution">
-                Duomenys: LEA. Pirminiai šaltiniai: degalinių tinklus valdančios įmonės, kurių
-                pavadinimai rodomi prie stočių.
-              </p>
             </div>
           )}
-        </div>
-      </header>
+          <section className="hero-fuel-strip" aria-label="Pigiausi variantai pagal kurą">
+            <div className="hero-fuel-strip__header">
+              <div>
+                <span className="hero-fuel-strip__label">Pigiausi variantai pagal kurą</span>
+                <h2>Kas šiandien pirmauja?</h2>
+              </div>
+              <p className="hero-fuel-strip__note">{heroFuelStripNote}</p>
+            </div>
+            <div className="hero-fuel-grid">
+              {FUEL_KEYS.map((key) => {
+                const station = cheapestStationsByFuel[key]
+                const distanceFromUserKm = station && userLocation ? distanceFromUserMap.get(station.id) : null
 
-      <section className="summary-grid">
-        <article className="summary-card">
-          <span className="summary-label">Stotelių šiandien</span>
-          <strong>{snapshot?.coverage.totalStations ?? 0}</strong>
-        </article>
-        <article className="summary-card">
-          <span className="summary-label">Su koordinatėmis</span>
-          <strong>{snapshot?.coverage.locatedStations ?? 0}</strong>
-        </article>
-        <article className="summary-card">
-          <span className="summary-label">Rodoma po filtrų</span>
-          <strong>{filteredStations.length}</strong>
-        </article>
-        <article className="summary-card">
-          <span className="summary-label">{routeResultLabel}</span>
-          <strong>{route ? displayedStations.length : 0}</strong>
-        </article>
-      </section>
+                return (
+                  <article key={key} className="hero-fuel-card">
+                    <div className="hero-fuel-card__top">
+                      <span className="hero-fuel-card__label">{FUEL_LABELS[key]}</span>
+                      <strong>{station ? formatFuelPrice(station.prices[key]) : 'N/A'}</strong>
+                    </div>
+                    {station ? (
+                      <>
+                        <p className="hero-fuel-card__name">{station.network}</p>
+                        <p className="hero-fuel-card__meta">{`${station.city} • ${station.address}`}</p>
+                        <p className="hero-fuel-card__meta">
+                          {distanceFromUserKm !== null && distanceFromUserKm !== undefined
+                            ? `Nuo jūsų: ${formatKilometers(distanceFromUserKm)}`
+                            : station.municipality}
+                        </p>
+                      </>
+                    ) : (
+                      <p className="hero-fuel-card__meta">
+                        {userLocation
+                          ? `Per ${NEARBY_CONTEXT_RADIUS_KM} km neradome šio kuro kainos.`
+                          : 'Pagal dabartinius filtrus kainos nėra.'}
+                      </p>
+                    )}
+                  </article>
+                )
+              })}
+            </div>
+          </section>
+          {snapshot && (
+            <p className="hero-source-note">
+              Duomenys: LEA. Pirminiai šaltiniai - degalinių tinklus valdančios įmonės.
+            </p>
+          )}
+          {userLocationError && <p className="hero-inline-error">{userLocationError}</p>}
+        </section>
+      </header>
 
       {snapshotError && <p className="status-banner status-banner--error">{snapshotError}</p>}
       {!snapshot && !snapshotError && (
@@ -1360,31 +1559,33 @@ function App() {
             </label>
             <label className="field">
               <span>Tinklas</span>
-              <select
+              <input
+                type="search"
+                list="network-filter-options"
                 value={networkFilter}
                 onChange={(event) => setNetworkFilter(event.target.value)}
-              >
-                <option value="all">Visi tinklai</option>
+                placeholder="Visi tinklai"
+              />
+              <datalist id="network-filter-options">
                 {selectableNetworks.map((network) => (
-                  <option key={network} value={network}>
-                    {network}
-                  </option>
+                  <option key={network} value={network} />
                 ))}
-              </select>
+              </datalist>
             </label>
             <label className="field">
               <span>Savivaldybė</span>
-              <select
+              <input
+                type="search"
+                list="municipality-filter-options"
                 value={municipalityFilter}
                 onChange={(event) => setMunicipalityFilter(event.target.value)}
-              >
-                <option value="all">Visa Lietuva</option>
+                placeholder="Visa Lietuva"
+              />
+              <datalist id="municipality-filter-options">
                 {municipalities.map((municipality) => (
-                  <option key={municipality} value={municipality}>
-                    {municipality}
-                  </option>
+                  <option key={municipality} value={municipality} />
                 ))}
-              </select>
+              </datalist>
             </label>
             <label className="field">
               <span>Sąraše rodyti</span>
@@ -1397,15 +1598,6 @@ function App() {
                 <option value="mapped">Tik su koordinatėmis</option>
                 <option value="route">Tik palei maršrutą</option>
               </select>
-            </label>
-            <label className="field">
-              <span>Miestas / gatvė / paieška</span>
-              <input
-                type="search"
-                value={areaQuery}
-                onChange={(event) => setAreaQuery(event.target.value)}
-                placeholder="Pvz. Vilnius, Kaunas, Kalvarijų"
-              />
             </label>
           </section>
 
@@ -1480,6 +1672,7 @@ function App() {
             featuredStationId={featuredStationId}
             focusedStationId={focusedStationId}
             focusTarget={mapFocusTarget}
+            currentLocation={userLocation}
             startPoint={startPoint}
             endPoint={endPoint}
             onMapPick={handleMapPick}
@@ -1488,9 +1681,20 @@ function App() {
           <section className="panel">
             <div className="panel-heading">
               <div>
-                <h2>{`Stotelių sąrašas (${displayedStations.length})`}</h2>
+                <h2>{`Stotelių pasiūlymai (${resultsTitleCount})`}</h2>
                 <p className="panel-note">
-                  Aktyvus kainos stulpelis: <strong>{FUEL_LABELS[fuelKey]}</strong>
+                  {isShowingCuratedStations ? (
+                    <>
+                      Rodome <strong>{DEFAULT_DISCOVERY_RESULTS_LIMIT} pigiausių</strong> variantų
+                      pagal <strong>{FUEL_LABELS[fuelKey]}</strong>. Jei norite, galite išskleisti
+                      visą sąrašą.
+                    </>
+                  ) : (
+                    <>
+                      Rodoma pagal <strong>{FUEL_LABELS[fuelKey]}</strong>, o kortelės išrikiuotos
+                      nuo pigiausios kainos.
+                    </>
+                  )}
                 </p>
               </div>
               {route && (
@@ -1501,6 +1705,18 @@ function App() {
               )}
             </div>
 
+            {isShowingCuratedStations && (
+              <div className="results-actions">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => setShowAllDefaultResults(true)}
+                >
+                  {`Rodyti visas ${sortedFilteredStations.length} stoteles`}
+                </button>
+              </div>
+            )}
+
             {displayedStations.length === 0 ? (
               <p className="empty-state">
                 {route && isLoadingRouteDetours
@@ -1510,96 +1726,93 @@ function App() {
                   : 'Kol kas nėra rodomų stotelių pagal pasirinktus filtrus.'}
               </p>
             ) : (
-              <div className="table-wrap">
-                <table className="stations-table">
-                  <thead>
-                    <tr>
-                      <th>Degalinė</th>
-                      <th>Vieta</th>
-                      <th>95</th>
-                      <th>Dyzelinas</th>
-                      <th>SND</th>
-                        <th>Papildomas kelias</th>
-                      <th>Numatoma kaina</th>
-                      <th>Maršrutas</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {displayedStations.map((station) => {
-                      const isOnRoute = routeStationIds.has(station.id)
-                      const isTopStation = station.id === topStationId
-                      const isBestStation = station.id === featuredStationId
-                      const isFocusedStation = station.id === focusedStationId
-                      const routeCandidate = routeCandidateMap.get(station.id)
-                      const canFocusOnMap = station.coordinates !== null
+              <div className="station-card-list">
+                {displayedStations.map((station) => {
+                  const isOnRoute = routeStationIds.has(station.id)
+                  const isTopStation = station.id === topStationId
+                  const isBestStation = station.id === featuredStationId
+                  const isFocusedStation = station.id === focusedStationId
+                  const routeCandidate = routeCandidateMap.get(station.id)
+                  const canFocusOnMap = station.coordinates !== null
+                  const distanceFromUserKm = distanceFromUserMap.get(station.id)
+                  const stationStatusLabel = isBestStation
+                    ? 'Pasiūlytas sustojimas'
+                    : isOnRoute
+                      ? 'Tinka kelionei'
+                      : station.coordinates
+                        ? 'Galima peržiūrėti žemėlapyje'
+                        : 'Trūksta koordinačių'
 
-                      return (
-                        <tr
-                          key={station.id}
-                          className={[
-                            'station-row',
-                            isTopStation ? 'station-row--top' : '',
-                            isOnRoute ? 'station-row--highlight' : '',
-                            isBestStation ? 'station-row--best' : '',
-                            isFocusedStation ? 'station-row--focused' : '',
-                          ]
-                            .filter(Boolean)
-                            .join(' ')}
-                        >
-                          <td data-label="Degalinė">
-                            <button
-                              type="button"
-                              className="station-focus-button"
-                              onClick={() => handleFocusStation(station)}
-                              disabled={!canFocusOnMap}
-                            >
-                              <strong>{station.network}</strong>
-                              <div className="address-text">{station.address}</div>
-                            </button>
-                          </td>
-                          <td data-label="Vieta">
-                            <span>{station.city}</span>
-                            <div className="address-text">{station.municipality}</div>
-                          </td>
-                          <td data-label="95">{formatFuelPrice(station.prices.gasoline95)}</td>
-                          <td data-label="Dyzelinas">{formatFuelPrice(station.prices.diesel)}</td>
-                          <td data-label="SND">{formatFuelPrice(station.prices.lpg)}</td>
-                          <td
-                            data-label="Papildomas kelias"
-                            className={routeCandidate ? 'table-number' : 'table-number table-number--muted'}
-                          >
-                            {routeCandidate
-                              ? formatKilometers(routeCandidate.detourDistanceKm)
-                              : '—'}
-                          </td>
-                          <td
-                            data-label="Numatoma kaina"
-                            className={routeCandidate ? 'table-number' : 'table-number table-number--muted'}
-                          >
-                            {routeCandidate
-                              ? formatMoney(routeCandidate.totalEstimatedCost)
-                              : '—'}
-                          </td>
-                          <td data-label="Maršrutas">
+                  return (
+                    <article
+                      key={station.id}
+                      className={[
+                        'station-card',
+                        isTopStation ? 'station-card--top' : '',
+                        isOnRoute ? 'station-card--highlight' : '',
+                        isBestStation ? 'station-card--best' : '',
+                        isFocusedStation ? 'station-card--focused' : '',
+                      ]
+                        .filter(Boolean)
+                        .join(' ')}
+                    >
+                      <div className="station-card__header">
+                        <div>
+                          <div className="station-card__badges">
                             {isFocusedStation ? (
                               <span className="route-pill route-pill--focus">Žiūrima žemėlapyje</span>
-                            ) : isTopStation ? (
-                              <span className="route-pill route-pill--top">Pirmas sąraše</span>
                             ) : isBestStation ? (
-                              <span className="route-pill route-pill--best">Pigiausia</span>
-                            ) : isOnRoute ? (
-                              <span className="route-pill route-pill--on">Pakeliui</span>
-                            ) : station.coordinates ? (
-                              <span className="route-pill">Žemėlapyje</span>
-                            ) : (
-                              <span className="route-pill">Be koord.</span>
-                            )}
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
+                              <span className="route-pill route-pill--best">Geriausias pasirinkimas</span>
+                            ) : isTopStation ? (
+                              <span className="route-pill route-pill--top">Pigiausia sąraše</span>
+                            ) : null}
+                            {isOnRoute && <span className="route-pill route-pill--on">Pakeliui</span>}
+                            {!station.coordinates && <span className="route-pill">Be koord.</span>}
+                          </div>
+                          <h3 className="station-card__title">{station.network}</h3>
+                          <p className="station-card__address">{station.address}</p>
+                          <p className="station-card__sub">{`${station.city} • ${station.municipality}`}</p>
+                        </div>
+                        <button
+                          type="button"
+                          className="secondary-button station-card__action"
+                          onClick={() => handleFocusStation(station)}
+                          disabled={!canFocusOnMap}
+                        >
+                          {isFocusedStation ? 'Pažymėta žemėlapyje' : 'Rodyti žemėlapyje'}
+                        </button>
+                      </div>
+
+                      <div className="station-card__summary">
+                        <div className="station-card__metric">
+                          <span>{FUEL_LABELS[fuelKey]}</span>
+                          <strong>{formatFuelPrice(station.prices[fuelKey])}</strong>
+                        </div>
+                        {routeCandidate ? (
+                          <div className="station-card__metric station-card__metric--accent">
+                            <span>Visa sustojimo kaina</span>
+                            <strong>{formatMoney(routeCandidate.totalEstimatedCost)}</strong>
+                          </div>
+                        ) : distanceFromUserKm !== undefined ? (
+                          <div className="station-card__metric">
+                            <span>Atstumas nuo jūsų</span>
+                            <strong>{formatKilometers(distanceFromUserKm)}</strong>
+                          </div>
+                        ) : null}
+                      </div>
+
+                      <div className="station-card__details">
+                        {routeCandidate && (
+                          <span>{`Papildomas kelias: ${formatKilometers(routeCandidate.detourDistanceKm)}`}</span>
+                        )}
+                        {distanceFromUserKm !== undefined && (
+                          <span>{`Nuo jūsų: ${formatKilometers(distanceFromUserKm)}`}</span>
+                        )}
+                        <span>{stationStatusLabel}</span>
+                      </div>
+                    </article>
+                  )
+                })}
               </div>
             )}
           </section>
