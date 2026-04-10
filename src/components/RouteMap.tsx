@@ -14,7 +14,7 @@ import type { RoutePoint, RouteResult, StationRecord } from '../../shared/types'
 interface RouteMapProps {
   stations: StationRecord[]
   route: RouteResult | null
-  activeSelection: 'start' | 'end' | 'none'
+  activeSelectionId: string | null
   routeStationIds: Set<string>
   topStationId: string | null
   featuredStationId: string | null
@@ -24,8 +24,11 @@ interface RouteMapProps {
     requestId: number
   } | null
   currentLocation: RoutePoint | null
-  startPoint: RoutePoint | null
-  endPoint: RoutePoint | null
+  routePoints: Array<{
+    id: string
+    label: string
+    point: RoutePoint | null
+  }>
   onMapPick: (point: RoutePoint) => void
 }
 
@@ -51,14 +54,14 @@ function formatPrice(value: number | null) {
 }
 
 function LocationPicker({
-  activeSelection,
+  activeSelectionId,
   onMapPick,
-}: Pick<RouteMapProps, 'activeSelection' | 'onMapPick'>) {
+}: Pick<RouteMapProps, 'activeSelectionId' | 'onMapPick'>) {
   const map = useMap()
 
   useMapEvents({
     click(event) {
-      if (activeSelection === 'none') {
+      if (!activeSelectionId) {
         return
       }
 
@@ -70,29 +73,27 @@ function LocationPicker({
   })
 
   useEffect(() => {
-    map.getContainer().style.cursor =
-      activeSelection === 'none' ? '' : activeSelection === 'start' ? 'crosshair' : 'copy'
+    map.getContainer().style.cursor = activeSelectionId ? 'crosshair' : ''
 
     return () => {
       map.getContainer().style.cursor = ''
     }
-  }, [activeSelection, map])
+  }, [activeSelectionId, map])
 
   return null
 }
 
 function FitToContent({
   currentLocation,
-  startPoint,
-  endPoint,
+  routePoints,
   route,
-}: Pick<RouteMapProps, 'currentLocation' | 'startPoint' | 'endPoint' | 'route'>) {
+}: Pick<RouteMapProps, 'currentLocation' | 'routePoints' | 'route'>) {
   const map = useMap()
 
   useEffect(() => {
     const points = route
       ? route.geometry.map(([lng, lat]) => latLng(lat, lng))
-      : [currentLocation, startPoint, endPoint]
+      : [currentLocation, ...routePoints.map((routePoint) => routePoint.point)]
           .filter((point): point is RoutePoint => point !== null)
           .map((point) => latLng(point.lat, point.lng))
 
@@ -106,7 +107,7 @@ function FitToContent({
     }
 
     map.fitBounds(latLngBounds(points), { padding: [28, 28] })
-  }, [currentLocation, endPoint, map, route, startPoint])
+  }, [currentLocation, map, route, routePoints])
 
   return null
 }
@@ -142,15 +143,14 @@ function FocusOnStation({
 export function RouteMap({
   stations,
   route,
-  activeSelection,
+  activeSelectionId,
   routeStationIds,
   topStationId,
   featuredStationId,
   focusedStationId,
   focusTarget,
   currentLocation,
-  startPoint,
-  endPoint,
+  routePoints,
   onMapPick,
 }: RouteMapProps) {
   const routeLine = route?.geometry.map(([lng, lat]) => [lat, lng] as [number, number]) ?? []
@@ -162,13 +162,8 @@ export function RouteMap({
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
-        <LocationPicker activeSelection={activeSelection} onMapPick={onMapPick} />
-        <FitToContent
-          route={route}
-          currentLocation={currentLocation}
-          startPoint={startPoint}
-          endPoint={endPoint}
-        />
+        <LocationPicker activeSelectionId={activeSelectionId} onMapPick={onMapPick} />
+        <FitToContent route={route} currentLocation={currentLocation} routePoints={routePoints} />
         <FocusOnStation focusTarget={focusTarget} stations={stations} />
         {routeLine.length > 0 && (
           <Polyline positions={routeLine} pathOptions={{ color: '#ff6b35', weight: 5 }} />
@@ -176,8 +171,24 @@ export function RouteMap({
         {currentLocation && (
           <Marker position={[currentLocation.lat, currentLocation.lng]} icon={currentLocationIcon} />
         )}
-        {startPoint && <Marker position={[startPoint.lat, startPoint.lng]} icon={startIcon} />}
-        {endPoint && <Marker position={[endPoint.lat, endPoint.lng]} icon={endIcon} />}
+        {routePoints.map((routePoint, index) => {
+          if (!routePoint.point) {
+            return null
+          }
+
+          const icon =
+            index === 0
+              ? startIcon
+              : index === routePoints.length - 1
+                ? endIcon
+                : createMarker('map-marker--waypoint', routePoint.label)
+
+          return (
+            <Marker key={routePoint.id} position={[routePoint.point.lat, routePoint.point.lng]} icon={icon}>
+              <Popup>{routePoint.label}</Popup>
+            </Marker>
+          )
+        })}
         {stations
           .filter((station) => station.coordinates !== null)
           .map((station) => {

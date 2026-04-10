@@ -3,6 +3,7 @@ import {
   GEOCODE_CACHE_TTL_MS,
   NEGATIVE_LOOKUP_CACHE_TTL_MS,
   createAddressCacheKey,
+  createPointCacheKey,
   createSuggestionCacheKey,
   getSuggestionCacheTtlMs,
 } from '../../shared/cache.js'
@@ -12,6 +13,7 @@ const GEOCODER_TIMEOUT_MS = 4000
 const DEFAULT_SUGGESTION_LIMIT = 5
 const LITHUANIA_COUNTRY_CODE = 'LT'
 const GEOCODE_CACHE_FILE = 'address-geocode-cache.json'
+const REVERSE_GEOCODE_CACHE_FILE = 'address-reverse-geocode-cache.json'
 const SUGGESTION_CACHE_FILE = 'address-suggestion-cache.json'
 const LITHUANIA_BBOX = {
   minLng: 20.93,
@@ -32,6 +34,27 @@ interface PhotonFeature {
     city?: string
     town?: string
     village?: string
+    county?: string
+    state?: string
+    country?: string
+  }
+}
+
+interface NominatimReverseResponse {
+  display_name?: string
+  address?: {
+    road?: string
+    pedestrian?: string
+    footway?: string
+    path?: string
+    cycleway?: string
+    house_number?: string
+    neighbourhood?: string
+    suburb?: string
+    city?: string
+    town?: string
+    village?: string
+    municipality?: string
     county?: string
     state?: string
     country?: string
@@ -133,6 +156,44 @@ async function fetchPhotonSuggestions(query: string, limit: number) {
     .filter((suggestion): suggestion is AddressSuggestion => suggestion !== null)
 }
 
+function formatReverseGeocodeLabel(payload: NominatimReverseResponse) {
+  const address = payload.address ?? {}
+  const streetName =
+    address.road ?? address.pedestrian ?? address.footway ?? address.path ?? address.cycleway
+  const addressLine = [streetName, address.house_number].filter(Boolean).join(' ').trim()
+  const locality =
+    address.city ?? address.town ?? address.village ?? address.municipality ?? address.county ?? address.state
+
+  return (
+    uniqueTextParts([addressLine || payload.display_name, address.neighbourhood, address.suburb, locality, address.country]).join(', ')
+  )
+}
+
+async function fetchReverseGeocodedLabel(point: RoutePoint) {
+  const url = new URL('https://nominatim.openstreetmap.org/reverse')
+  url.searchParams.set('format', 'jsonv2')
+  url.searchParams.set('lat', String(point.lat))
+  url.searchParams.set('lon', String(point.lng))
+  url.searchParams.set('accept-language', 'lt')
+
+  const response = await fetch(url, {
+    headers: {
+      'User-Agent': 'DegaluKainos/1.0 (+https://ena.lt)',
+      Accept: 'application/json',
+    },
+    signal: AbortSignal.timeout(GEOCODER_TIMEOUT_MS),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Nominatim reverse geocoder responded with ${response.status}.`)
+  }
+
+  const payload = (await response.json()) as NominatimReverseResponse
+  const label = formatReverseGeocodeLabel(payload)
+
+  return label || null
+}
+
 async function fetchCachedSuggestions(query: string, limit: number) {
   const cacheKey = createSuggestionCacheKey(query, limit)
   const cachedSuggestions = await readTimedJsonCacheValue<AddressSuggestion[]>(
@@ -209,4 +270,24 @@ export async function geocodeAddress(address: string): Promise<RoutePoint | null
   )
 
   return point
+}
+
+export async function reverseGeocodePoint(point: RoutePoint): Promise<string | null> {
+  const cacheKey = createPointCacheKey(point)
+  const cachedLabel = await readTimedJsonCacheValue<string | null>(REVERSE_GEOCODE_CACHE_FILE, cacheKey)
+
+  if (cachedLabel !== undefined) {
+    return cachedLabel
+  }
+
+  const label = await fetchReverseGeocodedLabel(point)
+
+  await writeTimedJsonCacheValue(
+    REVERSE_GEOCODE_CACHE_FILE,
+    cacheKey,
+    label,
+    label ? GEOCODE_CACHE_TTL_MS : NEGATIVE_LOOKUP_CACHE_TTL_MS,
+  )
+
+  return label
 }

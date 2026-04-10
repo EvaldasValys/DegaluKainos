@@ -79,4 +79,5 @@ export interface RouteDetourResult {
   detourDurationSeconds: number
   totalRouteDistanceMeters: number
   totalRouteDurationSeconds: number
+  insertAfterIndex: number
 }

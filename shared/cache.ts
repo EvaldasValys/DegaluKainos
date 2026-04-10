@@ -27,23 +27,21 @@ export function createSuggestionCacheKey(address: string, limit: number) {
 }
 
 export function createRouteCacheKey(start: RoutePoint, end: RoutePoint) {
+  return createRoutePointsCacheKey([start, end])
+}
+
+export function createRoutePointsCacheKey(points: RoutePoint[]) {
   return [
-    roundCoordinate(start.lat),
-    roundCoordinate(start.lng),
-    roundCoordinate(end.lat),
-    roundCoordinate(end.lng),
+    ...points.flatMap((point) => [roundCoordinate(point.lat), roundCoordinate(point.lng)]),
   ].join(',')
 }
 
+export function createPointCacheKey(point: RoutePoint) {
+  return createRoutePointsCacheKey([point])
+}
+
 export function createViaRouteCacheKey(start: RoutePoint, via: RoutePoint, end: RoutePoint) {
-  return [
-    roundCoordinate(start.lat),
-    roundCoordinate(start.lng),
-    roundCoordinate(via.lat),
-    roundCoordinate(via.lng),
-    roundCoordinate(end.lat),
-    roundCoordinate(end.lng),
-  ].join(',')
+  return createRoutePointsCacheKey([start, via, end])
 }
 
 export function getSuggestionCacheTtlMs(resultCount: number) {

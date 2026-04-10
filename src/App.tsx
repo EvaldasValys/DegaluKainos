@@ -17,6 +17,7 @@ import { RouteMap } from './components/RouteMap'
 import {
   fetchAddressPoint,
   fetchAddressSuggestions,
+  fetchReverseGeocodedAddress,
   fetchLatestPricesWithOptions,
   fetchRouteDetours,
   fetchRoute,
@@ -25,7 +26,7 @@ import './App.css'
 
 type ListVisibility = 'all' | 'priced' | 'mapped' | 'route'
 type PointInputMode = 'map' | 'address'
-type AddressFieldKey = 'start' | 'end'
+type AddressFieldKey = string
 
 const AUTOCOMPLETE_MIN_QUERY_LENGTH = 3
 const AUTOCOMPLETE_DEBOUNCE_MS = 250
@@ -39,10 +40,19 @@ const DEFAULT_PLANNED_FUEL_LITERS = 40
 const DEFAULT_FUEL_CONSUMPTION_PER_100_KM = 7
 const DEFAULT_DISCOVERY_RESULTS_LIMIT = 12
 
+function createWaypointId() {
+  return `waypoint-${Math.random().toString(36).slice(2, 10)}`
+}
+
+function getRoutePointLabel(index: number) {
+  return String.fromCharCode(65 + Math.min(index, 25))
+}
+
 interface RouteCandidate {
   station: StationRecord
   detourDistanceKm: number
   detourDurationSeconds: number
+  insertAfterIndex: number
   fuelPrice: number | null
   purchaseLiters: number
   purchaseCost: number | null
@@ -56,6 +66,18 @@ interface MapFocusTarget {
   requestId: number
 }
 
+interface RouteWaypoint {
+  id: string
+  address: string
+  point: RoutePoint | null
+}
+
+interface OrderedRouteField {
+  id: string
+  address: string
+  point: RoutePoint | null
+}
+
 interface AddressAutocompleteFieldProps {
   label: string
   value: string
@@ -63,10 +85,27 @@ interface AddressAutocompleteFieldProps {
   isActive: boolean
   isLoading: boolean
   suggestions: AddressSuggestion[]
+  hideLabel?: boolean
   onChange: (value: string) => void
   onFocus: () => void
   onBlur: () => void
   onSelectSuggestion: (suggestion: AddressSuggestion) => void
+}
+
+interface RoutePointAddressFieldProps {
+  fieldId: string
+  label: string
+  value: string
+  placeholder: string
+  isActive: boolean
+  isLocatingUser: boolean
+  markerVariant: 'start' | 'destination'
+  showConnector: boolean
+  onChange: (value: string) => void
+  onFocus: (fieldId: string) => void
+  onBlur: (fieldId: string) => void
+  onSelectSuggestion: (fieldId: string, suggestion: AddressSuggestion) => void
+  onUseMyLocation: (fieldId: string) => void
 }
 
 const fuelPriceFormatter = new Intl.NumberFormat('lt-LT', {
@@ -238,6 +277,7 @@ function AddressAutocompleteField({
   isActive,
   isLoading,
   suggestions,
+  hideLabel = false,
   onChange,
   onFocus,
   onBlur,
@@ -247,8 +287,8 @@ function AddressAutocompleteField({
 
   return (
     <div className="autocomplete-field">
-      <label className="field field--with-suggestions">
-        <span>{label}</span>
+      <label className="field field--with-suggestions field--route-input">
+        {!hideLabel && <span>{label}</span>}
         <input
           type="text"
           value={value}
@@ -257,6 +297,7 @@ function AddressAutocompleteField({
           onBlur={onBlur}
           placeholder={placeholder}
           autoComplete="off"
+          aria-label={hideLabel ? label : undefined}
         />
       </label>
       {showSuggestions && (
@@ -285,6 +326,62 @@ function AddressAutocompleteField({
     </div>
   )
 }
+
+function RoutePointAddressField({
+  fieldId,
+  label,
+  value,
+  placeholder,
+  isActive,
+  isLocatingUser,
+  markerVariant,
+  showConnector,
+  onChange,
+  onFocus,
+  onBlur,
+  onSelectSuggestion,
+  onUseMyLocation,
+}: RoutePointAddressFieldProps) {
+  const { suggestions, isLoading } = useAddressSuggestions(value, isActive)
+
+    return (
+      <div className="route-point-address-field">
+        <div
+          className={`route-point-address-field__marker route-point-address-field__marker--${markerVariant}${showConnector ? ' route-point-address-field__marker--with-connector' : ''}`}
+          aria-hidden="true"
+        >
+          <span className="route-point-address-field__icon" />
+        </div>
+        <div className="route-point-address-field__content">
+        <AddressAutocompleteField
+          label={label}
+          value={value}
+          placeholder={placeholder}
+          isActive={isActive}
+          isLoading={isLoading}
+          suggestions={suggestions}
+          hideLabel
+          onChange={onChange}
+          onFocus={() => onFocus(fieldId)}
+          onBlur={() => onBlur(fieldId)}
+          onSelectSuggestion={(suggestion) => onSelectSuggestion(fieldId, suggestion)}
+        />
+        {isActive && (
+          <button
+            type="button"
+            className="route-point-address-field__action"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => onUseMyLocation(fieldId)}
+            disabled={isLocatingUser}
+          >
+            <span className="route-point-address-field__action-icon" aria-hidden="true" />
+            <span>Naudoti mano dabartinę vietą</span>
+          </button>
+        )}
+        </div>
+      </div>
+    )
+  }
 
 function compareNullableNumbers(
   left: number | null | undefined,
@@ -402,6 +499,7 @@ function calculateRouteCandidate(
     station,
     detourDistanceKm,
     detourDurationSeconds: detourMetrics.detourDurationSeconds,
+    insertAfterIndex: detourMetrics.insertAfterIndex,
     fuelPrice,
     purchaseLiters,
     purchaseCost,
@@ -475,15 +573,13 @@ function formatRouteCalculationKeyPoint(pointValue: RoutePoint | null) {
 }
 
 function createRouteCalculationKey({
-  startPoint,
-  endPoint,
+  routePoints,
   snapshotDate,
   networkFilter,
   municipalityFilter,
   blacklistedNetworks,
 }: {
-  startPoint: RoutePoint | null
-  endPoint: RoutePoint | null
+  routePoints: Array<RoutePoint | null>
   snapshotDate: string | undefined
   networkFilter: string
   municipalityFilter: string
@@ -496,8 +592,7 @@ function createRouteCalculationKey({
 
   return [
     snapshotDate ?? 'no-snapshot',
-    formatRouteCalculationKeyPoint(startPoint),
-    formatRouteCalculationKeyPoint(endPoint),
+    routePoints.map((pointValue) => formatRouteCalculationKeyPoint(pointValue)).join('|'),
     networkFilter.trim().toLowerCase(),
     municipalityFilter.trim().toLowerCase(),
     normalizedBlacklist,
@@ -512,12 +607,15 @@ function App() {
   const [networkFilter, setNetworkFilter] = useState('')
   const [municipalityFilter, setMunicipalityFilter] = useState('')
   const [listVisibility, setListVisibility] = useState<ListVisibility>('all')
-  const [selectionMode, setSelectionMode] = useState<'start' | 'end'>('start')
+  const [selectionMode, setSelectionMode] = useState<string | null>('start')
   const [pointInputMode, setPointInputMode] = useState<PointInputMode>('address')
   const [startPoint, setStartPoint] = useState<RoutePoint | null>(null)
   const [endPoint, setEndPoint] = useState<RoutePoint | null>(null)
   const [startAddress, setStartAddress] = useState('')
   const [endAddress, setEndAddress] = useState('')
+  const [waypoints, setWaypoints] = useState<RouteWaypoint[]>([])
+  const [draggedRouteFieldId, setDraggedRouteFieldId] = useState<string | null>(null)
+  const [dragOverRouteFieldId, setDragOverRouteFieldId] = useState<string | null>(null)
   const [userLocation, setUserLocation] = useState<RoutePoint | null>(null)
   const [isLocatingUser, setIsLocatingUser] = useState(false)
   const [userLocationError, setUserLocationError] = useState<string | null>(null)
@@ -561,6 +659,15 @@ function App() {
   const blacklistedNetworkKeys = useMemo(
     () => new Set(blacklistedNetworks.map((network) => normalizeNetworkName(network))),
     [blacklistedNetworks],
+  )
+
+  const orderedAddressRouteFields = useMemo<OrderedRouteField[]>(
+    () => [
+      { id: 'start', address: startAddress, point: startPoint },
+      { id: 'end', address: endAddress, point: endPoint },
+      ...waypoints,
+    ],
+    [endAddress, endPoint, startAddress, startPoint, waypoints],
   )
 
   const selectableNetworks = useMemo(
@@ -756,17 +863,28 @@ function App() {
     return sortedRouteStations
   }, [isShowingCuratedStations, route, sortedFilteredStations, sortedRouteStations])
 
-  const topStationId = displayedStations.at(0)?.id ?? null
-  const activePointSelectionMode = pointInputMode === 'map' ? selectionMode : 'none'
-  const isStartAutocompleteActive =
-    pointInputMode === 'address' && activeAddressField === 'start'
-  const isEndAutocompleteActive = pointInputMode === 'address' && activeAddressField === 'end'
-  const { suggestions: startSuggestions, isLoading: isLoadingStartSuggestions } =
-    useAddressSuggestions(startAddress, isStartAutocompleteActive)
-  const { suggestions: endSuggestions, isLoading: isLoadingEndSuggestions } = useAddressSuggestions(
-    endAddress,
-    isEndAutocompleteActive,
+  const routePoints = useMemo(
+    () => [startPoint, endPoint, ...waypoints.map((waypoint) => waypoint.point)],
+    [endPoint, startPoint, waypoints],
   )
+  const mapRoutePoints = useMemo(
+    () =>
+      [
+        { id: 'start', point: startPoint },
+        { id: 'end', point: endPoint },
+        ...waypoints.map((waypoint) => ({
+          id: waypoint.id,
+          point: waypoint.point,
+        })),
+      ].map((routePoint, index) => ({
+        ...routePoint,
+        label: getRoutePointLabel(index),
+      })),
+    [endPoint, startPoint, waypoints],
+  )
+
+  const topStationId = displayedStations.at(0)?.id ?? null
+  const activePointSelectionMode = pointInputMode === 'map' ? selectionMode : null
   const hiddenStationCount = useMemo(
     () =>
       (snapshot?.stations ?? []).filter((station) =>
@@ -798,8 +916,7 @@ function App() {
   const currentRouteCalculationKey = useMemo(
     () =>
       createRouteCalculationKey({
-        startPoint,
-        endPoint,
+        routePoints,
         snapshotDate: snapshot?.snapshotDate,
         networkFilter,
         municipalityFilter,
@@ -807,18 +924,19 @@ function App() {
       }),
     [
       blacklistedNetworks,
-      endPoint,
       municipalityFilter,
       networkFilter,
+      routePoints,
       snapshot?.snapshotDate,
-      startPoint,
     ],
   )
   const isRouteCalculationStale =
     route !== null && lastRouteCalculationKey !== null && currentRouteCalculationKey !== lastRouteCalculationKey
 
   useEffect(() => {
-    if (!route || !startPoint || !endPoint) {
+    const resolvedRoutePoints = routePoints.filter((pointValue): pointValue is RoutePoint => pointValue !== null)
+
+    if (!route || resolvedRoutePoints.length < 2) {
       setDisplayRoute(null)
       setRouteDisplayError(null)
       setIsLoadingDisplayRoute(false)
@@ -839,10 +957,12 @@ function App() {
 
     void (async () => {
       try {
-        const nextDisplayRoute = await fetchRoute(startPoint, endPoint, {
+        const nextDisplayRoutePoints = [...resolvedRoutePoints]
+        nextDisplayRoutePoints.splice(routeDisplayCandidate.insertAfterIndex + 1, 0, {
           lat: routeDisplayCandidate.station.coordinates!.lat,
           lng: routeDisplayCandidate.station.coordinates!.lng,
         })
+        const nextDisplayRoute = await fetchRoute(nextDisplayRoutePoints)
 
         if (!ignore) {
           setDisplayRoute(nextDisplayRoute)
@@ -866,7 +986,7 @@ function App() {
     return () => {
       ignore = true
     }
-  }, [endPoint, route, routeDisplayCandidate, startPoint])
+  }, [route, routeDisplayCandidate, routePoints])
 
   useEffect(() => {
     if (!focusedStationId) {
@@ -953,37 +1073,57 @@ function App() {
     try {
       let nextStartPoint = startPoint
       let nextEndPoint = endPoint
+      let nextWaypoints = waypoints
 
       if (pointInputMode === 'address') {
-        if (!startAddress.trim() || !endAddress.trim()) {
-          setRouteError('Pirmiausia įveskite abu adresus A ir B.')
+        if (!startAddress.trim() || !endAddress.trim() || waypoints.some((waypoint) => !waypoint.address.trim())) {
+          setRouteError('Pirmiausia įveskite visus maršruto taškų adresus.')
           setIsLoadingRoute(false)
           return
         }
 
-        if (!nextStartPoint || !nextEndPoint) {
-          const [geocodedStartPoint, geocodedEndPoint] = await Promise.all([
-            nextStartPoint ? Promise.resolve(nextStartPoint) : fetchAddressPoint(startAddress),
-            nextEndPoint ? Promise.resolve(nextEndPoint) : fetchAddressPoint(endAddress),
-          ])
+        const routeAddressEntries = [
+          { id: 'start', address: startAddress, point: nextStartPoint },
+          { id: 'end', address: endAddress, point: nextEndPoint },
+          ...nextWaypoints.map((waypoint) => ({
+            id: waypoint.id,
+            address: waypoint.address,
+            point: waypoint.point,
+          })),
+        ]
 
-          nextStartPoint = geocodedStartPoint
-          nextEndPoint = geocodedEndPoint
-          setStartPoint(geocodedStartPoint)
-          setEndPoint(geocodedEndPoint)
+        if (routeAddressEntries.some((entry) => !entry.point)) {
+          const resolvedPoints = await Promise.all([
+            ...routeAddressEntries.map((entry) =>
+              entry.point ? Promise.resolve(entry.point) : fetchAddressPoint(entry.address),
+            ),
+          ])
+          nextStartPoint = resolvedPoints[0]
+          nextEndPoint = resolvedPoints[1] ?? null
+          nextWaypoints = nextWaypoints.map((waypoint, index) => ({
+            ...waypoint,
+            point: resolvedPoints[index + 2] ?? null,
+          }))
+          setStartPoint(nextStartPoint)
+          setEndPoint(nextEndPoint)
+          setWaypoints(nextWaypoints)
         }
       }
 
-      if (!nextStartPoint || !nextEndPoint) {
-        setRouteError('Pirmiausia pasirinkite abu taškus A ir B žemėlapyje.')
+      const resolvedRoutePoints = [nextStartPoint, nextEndPoint, ...nextWaypoints.map((waypoint) => waypoint.point)]
+
+      if (resolvedRoutePoints.some((pointValue) => pointValue === null)) {
+        setRouteError('Pirmiausia pasirinkite visus maršruto taškus.')
         setIsLoadingRoute(false)
         return
       }
 
-      const nextRoute = await fetchRoute(nextStartPoint, nextEndPoint)
+      const routePointsForCalculation = resolvedRoutePoints.filter(
+        (pointValue): pointValue is RoutePoint => pointValue !== null,
+      )
+      const nextRoute = await fetchRoute(routePointsForCalculation)
       const nextRouteCalculationKey = createRouteCalculationKey({
-        startPoint: nextStartPoint,
-        endPoint: nextEndPoint,
+        routePoints: routePointsForCalculation,
         snapshotDate: snapshot?.snapshotDate,
         networkFilter,
         municipalityFilter,
@@ -1021,11 +1161,7 @@ function App() {
       }
 
       try {
-        const nextRouteDetours = await fetchRouteDetours(
-          nextStartPoint,
-          nextEndPoint,
-          nextRouteDetourStations,
-        )
+        const nextRouteDetours = await fetchRouteDetours(routePointsForCalculation, nextRouteDetourStations)
 
         if (routeCalculationRequestIdRef.current !== requestId) {
           return
@@ -1066,17 +1202,25 @@ function App() {
   }
 
   function handleMapPick(pointValue: RoutePoint) {
-    if (pointInputMode !== 'map') {
+    if (pointInputMode !== 'map' || !selectionMode) {
       return
     }
 
     if (selectionMode === 'start') {
       setStartPoint(pointValue)
-      setSelectionMode('end')
-      return
+    } else if (selectionMode === 'end') {
+      setEndPoint(pointValue)
+    } else {
+      setWaypoints((previousWaypoints) =>
+        previousWaypoints.map((waypoint) =>
+          waypoint.id === selectionMode ? { ...waypoint, point: pointValue } : waypoint,
+        ),
+      )
     }
 
-    setEndPoint(pointValue)
+    const targetIds = ['start', 'end', ...waypoints.map((waypoint) => waypoint.id)]
+    const currentIndex = targetIds.indexOf(selectionMode)
+    setSelectionMode(targetIds[Math.min(currentIndex + 1, targetIds.length - 1)] ?? 'end')
   }
 
   function handleAddressChange(field: AddressFieldKey, value: string) {
@@ -1088,8 +1232,17 @@ function App() {
       return
     }
 
-    setEndAddress(value)
-    setEndPoint(null)
+    if (field === 'end') {
+      setEndAddress(value)
+      setEndPoint(null)
+      return
+    }
+
+    setWaypoints((previousWaypoints) =>
+      previousWaypoints.map((waypoint) =>
+        waypoint.id === field ? { ...waypoint, address: value, point: null } : waypoint,
+      ),
+    )
   }
 
   function handleAddressSuggestionSelect(field: AddressFieldKey, suggestion: AddressSuggestion) {
@@ -1098,9 +1251,17 @@ function App() {
     if (field === 'start') {
       setStartAddress(suggestion.label)
       setStartPoint(suggestion.point)
-    } else {
+    } else if (field === 'end') {
       setEndAddress(suggestion.label)
       setEndPoint(suggestion.point)
+    } else {
+      setWaypoints((previousWaypoints) =>
+        previousWaypoints.map((waypoint) =>
+          waypoint.id === field
+            ? { ...waypoint, address: suggestion.label, point: suggestion.point }
+            : waypoint,
+        ),
+      )
     }
 
     setActiveAddressField(null)
@@ -1112,37 +1273,160 @@ function App() {
     }
   }
 
-  const handleRequestUserLocation = useCallback(() => {
+  function applyOrderedAddressRouteFields(fields: OrderedRouteField[]) {
+    const [nextStartField, nextEndField, ...nextWaypointFields] = fields
+
+    if (!nextStartField || !nextEndField) {
+      return
+    }
+
+    setStartAddress(nextStartField.address)
+    setStartPoint(nextStartField.point)
+    setEndAddress(nextEndField.address)
+    setEndPoint(nextEndField.point)
+    setWaypoints(
+      nextWaypointFields.map((field) => ({
+        id: field.id.startsWith('waypoint-') ? field.id : createWaypointId(),
+        address: field.address,
+        point: field.point,
+      })),
+    )
+    setActiveAddressField(null)
+    setSelectionMode('start')
+    setRouteError(null)
+  }
+
+  function handleRemoveAddressRouteField(fieldId: string) {
+    if (orderedAddressRouteFields.length <= 2) {
+      return
+    }
+
+    applyOrderedAddressRouteFields(
+      orderedAddressRouteFields.filter((field) => field.id !== fieldId),
+    )
+  }
+
+  function handleAddressRouteFieldDragStart(fieldId: string) {
+    setDraggedRouteFieldId(fieldId)
+    setDragOverRouteFieldId(fieldId)
+  }
+
+  function handleAddressRouteFieldDragEnd() {
+    setDraggedRouteFieldId(null)
+    setDragOverRouteFieldId(null)
+  }
+
+  function handleAddressRouteFieldDrop(targetFieldId: string) {
+    if (!draggedRouteFieldId) {
+      return
+    }
+
+    if (draggedRouteFieldId === targetFieldId) {
+      handleAddressRouteFieldDragEnd()
+      return
+    }
+
+    const reorderedFields = [...orderedAddressRouteFields]
+    const draggedIndex = reorderedFields.findIndex((field) => field.id === draggedRouteFieldId)
+    const targetIndex = reorderedFields.findIndex((field) => field.id === targetFieldId)
+
+    if (draggedIndex === -1 || targetIndex === -1) {
+      handleAddressRouteFieldDragEnd()
+      return
+    }
+
+    const [draggedField] = reorderedFields.splice(draggedIndex, 1)
+
+    reorderedFields.splice(targetIndex, 0, draggedField)
+    applyOrderedAddressRouteFields(reorderedFields)
+    handleAddressRouteFieldDragEnd()
+  }
+
+  function handleAddWaypoint() {
+    const nextWaypoint = {
+      id: createWaypointId(),
+      address: '',
+      point: null,
+    } satisfies RouteWaypoint
+
+    setWaypoints((previousWaypoints) => [...previousWaypoints, nextWaypoint])
+
+    if (pointInputMode === 'map') {
+      setSelectionMode(nextWaypoint.id)
+    } else {
+      setActiveAddressField(nextWaypoint.id)
+    }
+  }
+
+  function handleRemoveWaypoint(waypointId: string) {
+    setWaypoints((previousWaypoints) =>
+      previousWaypoints.filter((waypoint) => waypoint.id !== waypointId),
+    )
+
+    if (activeAddressField === waypointId) {
+      setActiveAddressField(null)
+    }
+
+    if (selectionMode === waypointId) {
+      setSelectionMode('end')
+    }
+  }
+
+  function applyAddressFieldLocation(field: AddressFieldKey, point: RoutePoint, label: string) {
+    if (field === 'start') {
+      setStartAddress(label)
+      setStartPoint(point)
+    } else if (field === 'end') {
+      setEndAddress(label)
+      setEndPoint(point)
+    } else {
+      setWaypoints((previousWaypoints) =>
+        previousWaypoints.map((waypoint) =>
+          waypoint.id === field ? { ...waypoint, address: label, point } : waypoint,
+        ),
+      )
+    }
+
+    setActiveAddressField(null)
+  }
+
+  const handleRequestUserLocation = useCallback(async () => {
     if (!navigator.geolocation) {
       setUserLocationError('Jūsų naršyklė nepalaiko vietos nustatymo.')
-      return
+      return null
     }
 
     setIsLocatingUser(true)
     setUserLocationError(null)
 
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        setUserLocation({
-          lat: position.coords.latitude,
-          lng: position.coords.longitude,
-        })
-        setIsLocatingUser(false)
-      },
-      (error) => {
-        const errorMessage =
-          error.code === error.PERMISSION_DENIED
-            ? 'Vietos leidimas nebuvo suteiktas.'
-            : 'Nepavyko nustatyti jūsų vietos.'
-        setUserLocationError(errorMessage)
-        setIsLocatingUser(false)
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 1000 * 60 * 5,
-      },
-    )
+    return await new Promise<RoutePoint | null>((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const nextUserLocation = {
+            lat: position.coords.latitude,
+            lng: position.coords.longitude,
+          } satisfies RoutePoint
+
+          setUserLocation(nextUserLocation)
+          setIsLocatingUser(false)
+          resolve(nextUserLocation)
+        },
+        (error) => {
+          const errorMessage =
+            error.code === error.PERMISSION_DENIED
+              ? 'Vietos leidimas nebuvo suteiktas.'
+              : 'Nepavyko nustatyti jūsų vietos.'
+          setUserLocationError(errorMessage)
+          setIsLocatingUser(false)
+          resolve(null)
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 1000 * 60 * 5,
+        },
+      )
+    })
   }, [])
 
   useEffect(() => {
@@ -1151,18 +1435,34 @@ function App() {
     }
 
     requestedUserLocationOnLoadRef.current = true
-    handleRequestUserLocation()
+    void handleRequestUserLocation()
   }, [handleRequestUserLocation])
 
-  function handleUseCurrentLocationAsStart() {
-    if (!userLocation) {
-      handleRequestUserLocation()
+  async function handleUseCurrentLocation(field: AddressFieldKey) {
+    setPointInputMode('address')
+    const nextUserLocation = userLocation ?? (await handleRequestUserLocation())
+
+    if (!nextUserLocation) {
       return
     }
 
-    setPointInputMode('address')
-    setStartPoint(userLocation)
-    setStartAddress('Mano vieta')
+    let resolvedAddress = ''
+
+    try {
+      resolvedAddress = await fetchReverseGeocodedAddress(nextUserLocation)
+
+      if (resolvedAddress.trim()) {
+        setUserLocationError(null)
+      } else {
+        setUserLocationError('Nepavyko nustatyti dabartinio adreso.')
+        return
+      }
+    } catch {
+      setUserLocationError('Nepavyko nustatyti dabartinio adreso.')
+      return
+    }
+
+    applyAddressFieldLocation(field, nextUserLocation, resolvedAddress)
     setRouteError(null)
   }
 
@@ -1236,6 +1536,7 @@ function App() {
     setEndAddress('')
     setStartPoint(null)
     setEndPoint(null)
+    setWaypoints([])
     setUserLocationError(null)
     setCorridorKm(DEFAULT_CORRIDOR_KM)
     setPlannedFuelLiters(DEFAULT_PLANNED_FUEL_LITERS)
@@ -1269,9 +1570,10 @@ function App() {
   const routePanel = (
     <section className="panel">
       <h2>Maršrutas ir stotelės</h2>
-      <p className="panel-note">
-        Taškus galite įvesti adresais arba pasirinkti žemėlapyje. Geriausias sustojimas vertinamas
-        pagal pasirinktą kuro rūšį, planuojamą litražą ir tiksliai apskaičiuotą papildomą kelią.
+      <p className="panel-note route-panel__intro">
+        Maršruto taškus galite įvesti adresais arba pasirinkti žemėlapyje, prireikus pridėdami ir
+        tarpinius sustojimus. Geriausias sustojimas vertinamas pagal pasirinktą kuro rūšį,
+        planuojamą litražą ir tiksliai apskaičiuotą papildomą kelią.
       </p>
       <div className="toggle-group">
         <button
@@ -1284,7 +1586,7 @@ function App() {
             setActiveAddressField(null)
           }}
         >
-          Įvesti A ir B adresus
+          Įvesti maršruto adresus
         </button>
         <button
           type="button"
@@ -1300,68 +1602,139 @@ function App() {
         </button>
       </div>
       {pointInputMode === 'map' ? (
-        <div className="route-actions">
-          <button
-            type="button"
-            className={
-              selectionMode === 'start'
-                ? 'secondary-button secondary-button--active'
-                : 'secondary-button'
-            }
-            onClick={() => setSelectionMode('start')}
-          >
-            Rinkti tašką A
+        <>
+          <div className="route-point-picker">
+            <button
+              type="button"
+              className={
+                selectionMode === 'start'
+                  ? 'secondary-button secondary-button--active'
+                  : 'secondary-button'
+              }
+              onClick={() => setSelectionMode('start')}
+            >
+              Rinkti pradžios tašką
+            </button>
+            <button
+              type="button"
+              className={
+                selectionMode === 'end'
+                  ? 'secondary-button secondary-button--active'
+                  : 'secondary-button'
+              }
+              onClick={() => setSelectionMode('end')}
+            >
+              Rinkti tikslą
+            </button>
+            {waypoints.map((waypoint, index) => (
+              <div key={waypoint.id} className="route-waypoint-row">
+                <button
+                  type="button"
+                  className={
+                    selectionMode === waypoint.id
+                      ? 'secondary-button secondary-button--active'
+                      : 'secondary-button'
+                  }
+                  onClick={() => setSelectionMode(waypoint.id)}
+                >
+                  {`Rinkti tikslą ${index + 2}`}
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button route-waypoint-remove"
+                  onClick={() => handleRemoveWaypoint(waypoint.id)}
+                  aria-label={`Pašalinti tikslą ${index + 2}`}
+                >
+                  -
+                </button>
+              </div>
+            ))}
+          </div>
+          <button type="button" className="secondary-button route-point-add" onClick={handleAddWaypoint}>
+            Pridėti tikslą
           </button>
-          <button
-            type="button"
-            className={
-              selectionMode === 'end'
-                ? 'secondary-button secondary-button--active'
-                : 'secondary-button'
-            }
-            onClick={() => setSelectionMode('end')}
-          >
-            Rinkti tašką B
-          </button>
-        </div>
+        </>
       ) : (
-        <div className="address-entry">
-          <AddressAutocompleteField
-            label="Adresas A"
-            value={startAddress}
-            placeholder="Pvz. Gedimino pr. 1, Vilnius"
-            isActive={isStartAutocompleteActive}
-            isLoading={isLoadingStartSuggestions}
-            suggestions={startSuggestions}
-            onChange={(value) => handleAddressChange('start', value)}
-            onFocus={() => setActiveAddressField('start')}
-            onBlur={() => handleAddressBlur('start')}
-            onSelectSuggestion={(suggestion) => handleAddressSuggestionSelect('start', suggestion)}
-          />
-          <AddressAutocompleteField
-            label="Adresas B"
-            value={endAddress}
-            placeholder="Pvz. Laisvės al. 1, Kaunas"
-            isActive={isEndAutocompleteActive}
-            isLoading={isLoadingEndSuggestions}
-            suggestions={endSuggestions}
-            onChange={(value) => handleAddressChange('end', value)}
-            onFocus={() => setActiveAddressField('end')}
-            onBlur={() => handleAddressBlur('end')}
-            onSelectSuggestion={(suggestion) => handleAddressSuggestionSelect('end', suggestion)}
-          />
-        </div>
+        <>
+          <div className="waypoint-list">
+            {orderedAddressRouteFields.map((routeField, index) => {
+              const fieldLabel =
+                index === 0 ? 'Pradžios taškas' : index === 1 ? 'Tikslas' : `Tikslas ${index}`
+              const isDropTarget =
+                dragOverRouteFieldId === routeField.id && draggedRouteFieldId !== routeField.id
+
+              return (
+                <div
+                  key={routeField.id}
+                  className={`route-waypoint-row route-waypoint-row--address${isDropTarget ? ' route-waypoint-row--drop-target' : ''}`}
+                  onDragOver={(event) => {
+                    event.preventDefault()
+                    event.dataTransfer.dropEffect = 'move'
+
+                    if (draggedRouteFieldId && draggedRouteFieldId !== routeField.id) {
+                      setDragOverRouteFieldId(routeField.id)
+                    }
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault()
+                    handleAddressRouteFieldDrop(routeField.id)
+                  }}
+                >
+                  <button
+                    type="button"
+                    className="route-reorder-handle"
+                    draggable
+                    onDragStart={(event) => {
+                      event.dataTransfer.effectAllowed = 'move'
+                      event.dataTransfer.setData('text/plain', routeField.id)
+                      handleAddressRouteFieldDragStart(routeField.id)
+                    }}
+                    onDragEnd={handleAddressRouteFieldDragEnd}
+                    aria-label={`Perkelti ${fieldLabel.toLowerCase()}`}
+                  >
+                    <span className="route-reorder-handle__dots" aria-hidden="true">
+                      <span />
+                      <span />
+                      <span />
+                      <span />
+                      <span />
+                      <span />
+                    </span>
+                  </button>
+                  <RoutePointAddressField
+                    fieldId={routeField.id}
+                    label={fieldLabel}
+                    value={routeField.address}
+                    placeholder={fieldLabel}
+                    isActive={activeAddressField === routeField.id}
+                    isLocatingUser={isLocatingUser}
+                    markerVariant={index === 0 ? 'start' : 'destination'}
+                    showConnector={index < orderedAddressRouteFields.length - 1}
+                    onChange={(value) => handleAddressChange(routeField.id, value)}
+                    onFocus={setActiveAddressField}
+                    onBlur={handleAddressBlur}
+                    onSelectSuggestion={handleAddressSuggestionSelect}
+                    onUseMyLocation={(fieldId) => void handleUseCurrentLocation(fieldId)}
+                  />
+                  {index >= 2 && (
+                    <button
+                      type="button"
+                      className="secondary-button route-waypoint-remove"
+                      onClick={() => handleRemoveAddressRouteField(routeField.id)}
+                      aria-label={`Pašalinti ${fieldLabel.toLowerCase()}`}
+                    >
+                      -
+                    </button>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+          <button type="button" className="secondary-button route-point-add" onClick={handleAddWaypoint}>
+            Pridėti tikslą
+          </button>
+        </>
       )}
-      <div className="route-utility-actions">
-        <button
-          type="button"
-          className="secondary-button"
-          onClick={handleUseCurrentLocationAsStart}
-          disabled={isLocatingUser}
-        >
-          Naudoti mano vietą taškui A
-        </button>
-      </div>
       {userLocation && (
         <p className="panel-note">{`Jūsų vieta: ${formatPoint(userLocation, 'Nėra vietos duomenų')}`}</p>
       )}
@@ -1666,15 +2039,14 @@ function App() {
           <RouteMap
             stations={sortedFilteredStations}
             route={displayRoute ?? route}
-            activeSelection={activePointSelectionMode}
+            activeSelectionId={activePointSelectionMode}
             routeStationIds={routeStationIds}
             topStationId={topStationId}
             featuredStationId={featuredStationId}
             focusedStationId={focusedStationId}
             focusTarget={mapFocusTarget}
             currentLocation={userLocation}
-            startPoint={startPoint}
-            endPoint={endPoint}
+            routePoints={mapRoutePoints}
             onMapPick={handleMapPick}
           />
 

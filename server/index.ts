@@ -9,7 +9,7 @@ import {
   STATIC_ASSET_CACHE_MAX_AGE_SECONDS,
   SUGGESTION_CACHE_TTL_MS,
 } from '../shared/cache.js'
-import { geocodeAddress, suggestAddresses } from './lib/geocoding-service.js'
+import { geocodeAddress, reverseGeocodePoint, suggestAddresses } from './lib/geocoding-service.js'
 import { refreshLatestSnapshot } from './lib/price-service.js'
 import { fetchRoute, fetchRouteDetours } from './lib/routing-service.js'
 import { readLatestPublishedSnapshot } from './lib/snapshot-store.js'
@@ -63,6 +63,29 @@ function parseRoutePoint(value: string | undefined) {
   }
 
   return { lat, lng }
+}
+
+function parseRoutePoints(value: string | undefined) {
+  if (!value) {
+    return null
+  }
+
+  const points = value
+    .split(';')
+    .map((entry) => parseRoutePoint(entry))
+    .filter((point): point is RoutePoint => point !== null)
+
+  return points.length >= 2 ? points : null
+}
+
+function parseBodyRoutePoints(value: unknown) {
+  if (!Array.isArray(value)) {
+    return null
+  }
+
+  const points = value.filter((entry): entry is RoutePoint => isRoutePoint(entry))
+
+  return points.length >= 2 ? points : null
 }
 
 function isRoutePoint(value: unknown): value is RoutePoint {
@@ -183,17 +206,27 @@ async function createServer() {
   })
 
   app.get('/api/route', async (request, response) => {
-    const start = parseRoutePoint(request.query.from as string | undefined)
-    const end = parseRoutePoint(request.query.to as string | undefined)
-    const via = parseRoutePoint(request.query.via as string | undefined)
+    const points =
+      parseRoutePoints(request.query.points as string | undefined) ??
+      (() => {
+        const start = parseRoutePoint(request.query.from as string | undefined)
+        const end = parseRoutePoint(request.query.to as string | undefined)
+        const via = parseRoutePoint(request.query.via as string | undefined)
 
-    if (!start || !end) {
-      response.status(400).json({ error: 'Both route points must be provided as lat,lng pairs.' })
+        if (!start || !end) {
+          return null
+        }
+
+        return via ? [start, via, end] : [start, end]
+      })()
+
+    if (!points) {
+      response.status(400).json({ error: 'At least two route points must be provided as lat,lng pairs.' })
       return
     }
 
     try {
-      const route = await fetchRoute(start, end, via ?? undefined)
+      const route = await fetchRoute(points)
       setPublicCache(response, Math.floor(ROUTE_CACHE_TTL_MS / 1000), true)
       response.json(route)
     } catch (error) {
@@ -204,19 +237,18 @@ async function createServer() {
   })
 
   app.post('/api/route/detours', async (request, response) => {
-    const start = isRoutePoint(request.body?.from) ? request.body.from : null
-    const end = isRoutePoint(request.body?.to) ? request.body.to : null
+    const points = parseBodyRoutePoints(request.body?.points)
     const stations = parseRouteDetourStations(request.body?.stations)
 
-    if (!start || !end || !stations) {
+    if (!points || !stations) {
       response.status(400).json({
-        error: 'Route detour analysis requires valid from/to points and a stations array.',
+        error: 'Route detour analysis requires a valid route points array and a stations array.',
       })
       return
     }
 
     try {
-      const detours = await fetchRouteDetours(start, end, stations)
+      const detours = await fetchRouteDetours(points, stations)
       response.json(detours)
     } catch (error) {
       response.status(502).json({
@@ -269,6 +301,33 @@ async function createServer() {
     } catch (error) {
       response.status(502).json({
         error: error instanceof Error ? error.message : 'Failed to fetch address suggestions',
+      })
+    }
+  })
+
+  app.get('/api/geocode/reverse', async (request, response) => {
+    const lat = Number(request.query.lat)
+    const lng = Number(request.query.lng)
+
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      response.status(400).json({ error: 'Latitude and longitude are required.' })
+      return
+    }
+
+    try {
+      const label = await reverseGeocodePoint({ lat, lng })
+
+      if (!label) {
+        setPublicCache(response, Math.floor(NEGATIVE_LOOKUP_CACHE_TTL_MS / 1000))
+        response.status(404).json({ error: 'Address could not be reverse geocoded.' })
+        return
+      }
+
+      setPublicCache(response, Math.floor(GEOCODE_CACHE_TTL_MS / 1000), true)
+      response.json({ label })
+    } catch (error) {
+      response.status(502).json({
+        error: error instanceof Error ? error.message : 'Failed to reverse geocode the address',
       })
     }
   })

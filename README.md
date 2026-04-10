@@ -8,7 +8,7 @@ Web app for comparing Lithuania's fuel prices from LEA using a **published backe
 - Parses LEA workbook prices for **95 benzinas**, **dyzelinas**, and **SND**
 - Matches stations to OpenStreetMap fuel locations and caches coordinates
 - Falls back to limited station address geocoding when coordinates are missing
-- Lets users define route points **A** and **B** on the map or by entering **Lithuanian addresses with autocomplete**
+- Lets users define ordered route points on the map or by entering **Lithuanian addresses with autocomplete**, including intermediate stops between **A** and **B**
 - Can optionally use the browser's current location to show nearby station context and prefill route point **A**
 - Shows all stations along the route, highlights the best stop based on price, planned liters, and exact road-route detour cost, and can draw the route through the highlighted stop
 - Presents the main recommendation in an answer-first summary card and shows station results as mobile-friendly cards

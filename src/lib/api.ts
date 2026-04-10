@@ -13,8 +13,8 @@ import {
   ROUTE_CACHE_TTL_MS,
   SUGGESTION_CACHE_TTL_MS,
   createAddressCacheKey,
-  createRouteCacheKey,
-  createViaRouteCacheKey,
+  createPointCacheKey,
+  createRoutePointsCacheKey,
   createSuggestionCacheKey,
 } from '../../shared/cache'
 
@@ -111,6 +111,10 @@ interface CachedJsonRequestOptions<T> {
   skipFreshCache?: boolean
 }
 
+interface ReverseGeocodeResponse {
+  label: string
+}
+
 async function fetchCachedJson<T>({
   cacheKey,
   ttlMs,
@@ -188,28 +192,24 @@ export async function fetchLatestPricesWithOptions(options?: { forceRefresh?: bo
   })
 }
 
-export async function fetchRoute(start: RoutePoint, end: RoutePoint, via?: RoutePoint) {
+export async function fetchRoute(points: RoutePoint[]) {
   const params = new URLSearchParams({
-    from: `${start.lat},${start.lng}`,
-    to: `${end.lat},${end.lng}`,
+    points: points.map((point) => `${point.lat},${point.lng}`).join(';'),
   })
 
-  if (via) {
-    params.set('via', `${via.lat},${via.lng}`)
+  if (points.length < 2) {
+    throw new Error('At least two route points are required.')
   }
 
   return fetchCachedJson<RouteResult>({
-    cacheKey: `route:${
-      via ? createViaRouteCacheKey(start, via, end) : createRouteCacheKey(start, end)
-    }`,
+    cacheKey: `route:${createRoutePointsCacheKey(points)}`,
     ttlMs: ROUTE_CACHE_TTL_MS,
     url: `/api/route?${params.toString()}`,
   })
 }
 
 export async function fetchRouteDetours(
-  start: RoutePoint,
-  end: RoutePoint,
+  points: RoutePoint[],
   stations: RouteDetourStation[],
 ) {
   return readJson<RouteDetourResult[]>(
@@ -219,8 +219,7 @@ export async function fetchRouteDetours(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        from: start,
-        to: end,
+        points,
         stations,
       }),
     }),
@@ -252,4 +251,20 @@ export async function fetchAddressSuggestions(address: string) {
     getTtlMs: (suggestions) =>
       suggestions.length > 0 ? SUGGESTION_CACHE_TTL_MS : NEGATIVE_LOOKUP_CACHE_TTL_MS,
   })
+}
+
+export async function fetchReverseGeocodedAddress(point: RoutePoint) {
+  const params = new URLSearchParams({
+    lat: String(point.lat),
+    lng: String(point.lng),
+  })
+
+  const response = await fetchCachedJson<ReverseGeocodeResponse>({
+    cacheKey: `reverse-geocode:${createPointCacheKey(point)}`,
+    ttlMs: GEOCODE_CACHE_TTL_MS,
+    url: `/api/geocode/reverse?${params.toString()}`,
+    notFoundMessage: 'Address could not be reverse geocoded.',
+  })
+
+  return response.label
 }
